@@ -18,6 +18,23 @@
 	],
 	// Sandboxed plugins require Worker Loader, available on Workers paid plans. Uncomment to enable:
 	// "worker_loaders": [{ "binding": "LOADER" }],
+	// Observability (kept in sync with the Cloudflare dashboard)
+	"observability": {
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1,
+			"invocation_logs": true,
+			"persist": true,
+		},
+		"traces": {
+			"enabled": false,
+			"head_sampling_rate": 1,
+			"persist": true,
+		},
+		"issue_detection": {
+			"enabled": false,
+		},
+	},
 	// General maintenance cron trigger
 	"triggers": {
 		"crons": ["* * * * *"],
