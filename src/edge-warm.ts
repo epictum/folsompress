@@ -23,7 +23,7 @@
  * ROLLBACK: set EDGE_WARM to false and redeploy. Nothing else depends on it.
  */
 
-export const EDGE_WARM = true;
+export const EDGE_WARM = false;
 
 /** Response header recording when the Worker rendered a cacheable page. */
 export const RENDERED_HEADER = "x-edge-rendered";
