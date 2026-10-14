@@ -27,15 +27,17 @@
 			"bucket_name": "folsompress-media","preview_bucket_name": "folsompress-media",
 		},
 	],
-	// Astro session storage. Pinned to the namespace production already uses so
-	// that `wrangler preview` (branch preview builds) can deploy; production
-	// deploys previously auto-filled this ID.
-	"kv_namespaces": [
-		{
-			"binding": "SESSION",
-			"id": "b9d6576ccc3c41d4bc825ec58928983a",
-		},
-	],
+	// Branch preview builds (`wrangler preview`) need an explicit ID for Astro's
+	// session store; production deploys fill it in automatically. Points at the
+	// same namespace production already uses.
+	"previews": {
+		"kv_namespaces": [
+			{
+				"binding": "SESSION",
+				"id": "b9d6576ccc3c41d4bc825ec58928983a",
+			},
+		],
+	},
 	// Sandboxed plugins require Worker Loader, available on Workers paid plans. Uncomment to enable:
 	// "worker_loaders": [{ "binding": "LOADER" }],
 	// Observability (kept in sync with the Cloudflare dashboard)
