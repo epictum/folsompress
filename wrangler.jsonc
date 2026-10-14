@@ -4,6 +4,13 @@
 	"main": "./src/worker.ts",
 	"compatibility_date": "2026-02-24",
 	"compatibility_flags": ["nodejs_compat"],
+	// Run the Worker next to the D1 primary (WNAM) so each query is a short
+	// hop instead of a cross-region round trip. EmDash recommends this for
+	// server-rendered pages. ROLLBACK: delete this block and redeploy.
+	"placement": {
+		"mode": "targeted",
+		"region": "aws:us-west-1",
+	},
 	// Runtime variables (kept in sync with the Cloudflare dashboard)
 	"vars": {
 		"EMDASH_SITE_URL": "https://folsompress.michael-a46.workers.dev",
@@ -20,6 +27,17 @@
 			"bucket_name": "folsompress-media","preview_bucket_name": "folsompress-media",
 		},
 	],
+	// Branch preview builds (`wrangler preview`) need an explicit ID for Astro's
+	// session store; production deploys fill it in automatically. Points at the
+	// same namespace production already uses.
+	"previews": {
+		"kv_namespaces": [
+			{
+				"binding": "SESSION",
+				"id": "b9d6576ccc3c41d4bc825ec58928983a",
+			},
+		],
+	},
 	// Sandboxed plugins require Worker Loader, available on Workers paid plans. Uncomment to enable:
 	// "worker_loaders": [{ "binding": "LOADER" }],
 	// Observability (kept in sync with the Cloudflare dashboard)
