@@ -21,7 +21,7 @@
  */
 
 export const PLUGIN_ID = "simple-code-snippets";
-export const PLUGIN_VERSION = "1.3.0";
+export const PLUGIN_VERSION = "1.4.0";
 
 /** Single configuration record (the PRD's `id = 1` row). */
 export const CONFIG_KEY = "config:settings";

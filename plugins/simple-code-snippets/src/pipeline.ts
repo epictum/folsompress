@@ -117,11 +117,94 @@ export function scanSnippet(code: string): ScanResult {
 
 // ── Validation ──────────────────────────────────────────────────
 
+const TYPE_ATTR_RE = /\btype\s*=\s*["']?([^"'\s>]+)/i;
+const SRC_ATTR_RE = /\bsrc\s*=/i;
+const JS_TYPES = new Set([
+	"",
+	"text/javascript",
+	"application/javascript",
+	"application/ecmascript",
+	"text/ecmascript",
+	"module",
+]);
+const JSON_TYPES = new Set(["application/ld+json", "application/json", "importmap", "speculationrules"]);
+
+function scriptType(attrs: string): string {
+	return (TYPE_ATTR_RE.exec(attrs)?.[1] ?? "").toLowerCase();
+}
+
+
 export interface ValidationResult {
 	/** Blocking: the snippet is not saved. */
 	errors: string[];
 	/** Non-blocking: saved, but surfaced to the administrator. */
 	warnings: string[];
+}
+
+/** Anything that looks like a closing script/style tag, well-formed or not. */
+const ANY_RAW_CLOSE_RE = /<\/[^<>]*?\b(script|style)\b[^<>]*>/gi;
+const PROPER_RAW_CLOSE_RE = /^<\/(script|style)\s*>$/i;
+/** An opening script/style tag at the start of a line (a real tag, not a string). */
+const LINE_START_OPEN_RE = /(^|\n)([ \t]*)<(script|style)\b[^>]*>/gi;
+
+function countLines(text: string): number {
+	let n = 0;
+	for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+	return n;
+}
+
+/**
+ * Structural mistakes that still "balance" under HTML parsing rules but
+ * break the snippet in the browser, e.g. a malformed `</ script>` that
+ * makes one script swallow the next.
+ */
+function findStructuralErrors(code: string, segments: Segment[]): string[] {
+	const found: Array<{ line: number; message: string }> = [];
+
+	// 1. Malformed closing tags such as `</ script>` or `</ foo script>`.
+	const badCloseLines = new Set<number>();
+	for (const m of code.matchAll(ANY_RAW_CLOSE_RE)) {
+		if (PROPER_RAW_CLOSE_RE.test(m[0])) continue;
+		const line = lineAt(code, m.index ?? 0);
+		const tag = m[1]!.toLowerCase();
+		badCloseLines.add(line);
+		found.push({
+			line,
+			message: `Line ${line}: "${m[0]}" is not a valid closing tag, so the <${tag}> before it keeps running past this point. Change it to </${tag}>.`,
+		});
+	}
+
+	for (const seg of segments) {
+		if (seg.kind !== "raw") continue;
+		const { block } = seg;
+		const lastLine = block.bodyLine + countLines(block.body);
+		// A malformed closer inside this block is the root cause; don't pile on.
+		let rootCauseInside = false;
+		for (const l of badCloseLines) if (l >= block.line && l <= lastLine) rootCauseInside = true;
+		if (rootCauseInside) continue;
+
+		// 2. A new <script>/<style> starting on its own line inside a block.
+		LINE_START_OPEN_RE.lastIndex = 0;
+		const nested = LINE_START_OPEN_RE.exec(block.body);
+		if (nested) {
+			const line = block.bodyLine + countLines(block.body.slice(0, nested.index + nested[1]!.length));
+			found.push({
+				line,
+				message: `Line ${line}: a new <${nested[3]!.toLowerCase()}> starts inside the <${block.tag}> opened on line ${block.line}. Add </${block.tag}> before line ${line}.`,
+			});
+			continue;
+		}
+
+		// 3. External scripts ignore their body, so code written there never runs.
+		if (block.tag === "script" && SRC_ATTR_RE.test(block.attrs) && block.body.trim()) {
+			found.push({
+				line: block.line,
+				message: `Line ${block.line}: this <script> loads a src file, so browsers ignore the code written inside it (lines ${block.line}–${lastLine}). Close it with </script> right after the opening tag and put inline code in its own <script>.`,
+			});
+		}
+	}
+
+	return found.sort((a, b) => a.line - b.line).map((f) => f.message);
 }
 
 const EVENT_HANDLER_RE = /\s(on[a-z]+)\s*=/gi;
@@ -146,6 +229,7 @@ export function validateSnippet(code: string): ValidationResult {
 
 	const { segments, errors: tagErrors } = scanSnippet(code);
 	errors.push(...tagErrors);
+	if (tagErrors.length === 0) errors.push(...findStructuralErrors(code, segments));
 
 	const handlers = new Set<string>();
 	let visibleText = false;
@@ -202,22 +286,6 @@ export function validateSnippet(code: string): ValidationResult {
 
 export class MinifyError extends Error {
 	override name = "MinifyError";
-}
-
-const TYPE_ATTR_RE = /\btype\s*=\s*["']?([^"'\s>]+)/i;
-const SRC_ATTR_RE = /\bsrc\s*=/i;
-const JS_TYPES = new Set([
-	"",
-	"text/javascript",
-	"application/javascript",
-	"application/ecmascript",
-	"text/ecmascript",
-	"module",
-]);
-const JSON_TYPES = new Set(["application/ld+json", "application/json", "importmap", "speculationrules"]);
-
-function scriptType(attrs: string): string {
-	return (TYPE_ATTR_RE.exec(attrs)?.[1] ?? "").toLowerCase();
 }
 
 /** Small, safe CSS minifier: comments, whitespace, and redundant semicolons. */
@@ -299,6 +367,54 @@ export async function minifySnippet(code: string): Promise<string> {
 	return parts.join("").trim();
 }
 
+// ── Syntax check ────────────────────────────────────────────────
+
+/**
+ * Parse every inline JavaScript and JSON block so syntax errors are caught
+ * on save, whether or not minification is on. Returns blocking errors with
+ * the snippet line number to fix.
+ */
+export async function checkScriptSyntax(code: string): Promise<string[]> {
+	const { segments, errors: scanErrors } = scanSnippet(code);
+	if (scanErrors.length > 0) return [];
+
+	const errors: string[] = [];
+	for (const seg of segments) {
+		if (seg.kind !== "raw" || seg.block.tag !== "script") continue;
+		const { block } = seg;
+		if (!block.body.trim() || SRC_ATTR_RE.test(block.attrs)) continue;
+		const type = scriptType(block.attrs);
+
+		if (JSON_TYPES.has(type)) {
+			try {
+				JSON.parse(block.body);
+			} catch (err) {
+				errors.push(
+					`Line ${block.line}: <script type="${type}"> does not contain valid JSON (${(err as Error).message}).`,
+				);
+			}
+			continue;
+		}
+		if (!JS_TYPES.has(type)) continue;
+
+		const { minify } = await import("terser");
+		try {
+			await minify(block.body, {
+				module: type === "module",
+				compress: false,
+				mangle: false,
+			});
+		} catch (err) {
+			const e = err as { message?: string; line?: number };
+			const line = typeof e.line === "number" ? block.bodyLine + e.line - 1 : block.line;
+			errors.push(
+				`Line ${line}: JavaScript syntax error in the <script> that starts on line ${block.line}: ${e.message ?? "the script could not be parsed"}.`,
+			);
+		}
+	}
+	return errors;
+}
+
 // ── Full save pipeline ──────────────────────────────────────────
 
 export interface PipelineInput {
@@ -320,6 +436,7 @@ export interface PipelineOutput {
 
 export async function runPipeline(input: PipelineInput): Promise<PipelineOutput> {
 	const { errors, warnings } = validateSnippet(input.codeContent);
+	if (errors.length === 0) errors.push(...(await checkScriptSyntax(input.codeContent)));
 	if (errors.length > 0) {
 		return { ok: false, errors, warnings, compiledContent: "", isMinified: input.isMinified };
 	}

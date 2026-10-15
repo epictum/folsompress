@@ -219,6 +219,29 @@ function ToggleRow({
 	);
 }
 
+/** Split "Line 12: message" into its line number and the rest. */
+function parseLineRef(message: string): { line: number; rest: string } | null {
+	const m = /^Line (\d+):\s*([\s\S]*)$/.exec(message);
+	return m ? { line: Number(m[1]), rest: m[2]! } : null;
+}
+
+type EditorAnnotation = { row: number; column: number; type: "error" | "warning"; text: string };
+
+/** Gutter markers for every message that names a line. */
+function toAnnotations(errors: string[], warnings: string[]): EditorAnnotation[] {
+	const out: EditorAnnotation[] = [];
+	for (const [list, type] of [
+		[errors, "error"],
+		[warnings, "warning"],
+	] as const) {
+		for (const message of list) {
+			const ref = parseLineRef(message);
+			if (ref) out.push({ row: ref.line - 1, column: 0, type, text: ref.rest });
+		}
+	}
+	return out;
+}
+
 const PLACEMENT_LABEL: Record<Placement, string> = { head: "Header", footer: "Footer" };
 
 /** Plain-language summary of what a save changed, for the toast. */
@@ -246,11 +269,14 @@ function Notice({
 	title,
 	items,
 	onDismiss,
+	onLineClick,
 }: {
 	tone: "danger" | "warning";
 	title: string;
 	items?: string[];
 	onDismiss?: () => void;
+	/** When set, a leading "Line N:" becomes a link that jumps the editor there. */
+	onLineClick?: (line: number) => void;
 }) {
 	// Same treatments the EmDash admin uses for inline error and warning callouts.
 	const styles = {
@@ -267,9 +293,22 @@ function Notice({
 						</div>
 					{items && items.length > 0 && (
 						<ul className="list-disc ps-5 text-sm text-kumo-default space-y-0.5">
-							{items.map((item) => (
-								<li key={item}>{item}</li>
-							))}
+							{items.map((item) => {
+								const ref = parseLineRef(item);
+								if (!ref || !onLineClick) return <li key={item}>{item}</li>;
+								return (
+									<li key={item}>
+										<button
+											type="button"
+											onClick={() => onLineClick(ref.line)}
+											className="font-medium text-kumo-link hover:underline"
+										>
+											Line {ref.line}
+										</button>
+										: {ref.rest}
+									</li>
+								);
+							})}
 						</ul>
 					)}
 				</div>
@@ -355,6 +394,26 @@ function SettingsPage() {
 	const [fallback, setFallback] = React.useState<string | null>(null);
 
 	const [showDelete, setShowDelete] = React.useState(false);
+
+	// Editor instance (from react-ace onLoad) and the issues box, for jump-to-line.
+	const editorRef = React.useRef<{
+		gotoLine: (line: number, column: number, animate: boolean) => void;
+		focus: () => void;
+	} | null>(null);
+	const issuesRef = React.useRef<HTMLDivElement | null>(null);
+	const [scrollToIssues, setScrollToIssues] = React.useState(0);
+	React.useEffect(() => {
+		if (scrollToIssues > 0) issuesRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+	}, [scrollToIssues]);
+
+	const jumpToLine = React.useCallback((line: number) => {
+		const editor = editorRef.current;
+		if (!editor) return;
+		editor.gotoLine(line, 0, true);
+		editor.focus();
+	}, []);
+
+	const annotations = React.useMemo(() => toAnnotations(errors, warnings), [errors, warnings]);
 	const [isDeleting, setIsDeleting] = React.useState(false);
 
 	const applyConfig = React.useCallback((config: SnippetConfig) => {
@@ -411,6 +470,7 @@ function SettingsPage() {
 			if (!result.success || !result.config) {
 				const resultErrors = result.errors ?? ["Saving failed."];
 				setErrors(resultErrors);
+				setScrollToIssues((n) => n + 1);
 				toast.add({
 					title: "Settings not saved",
 					description:
@@ -425,6 +485,7 @@ function SettingsPage() {
 			applyConfig(result.config);
 			if (result.minifyFallback) setFallback(result.minifyFallback);
 			const needsReview = resultWarnings.length > 0 || Boolean(result.minifyFallback);
+			if (needsReview) setScrollToIssues((n) => n + 1);
 			toast.add({
 				title: "Settings updated",
 				description: needsReview ? `${summary} Review the notes shown on this page.` : summary,
@@ -478,28 +539,6 @@ function SettingsPage() {
 			/>
 
 			<div className="mt-6 grid gap-8">
-				{(fallback || errors.length > 0 || warnings.length > 0) && (
-					<div className="grid gap-3">
-						{fallback && (
-							<Notice
-								tone="warning"
-								title="Minification turned off"
-								items={[fallback]}
-								onDismiss={() => setFallback(null)}
-							/>
-						)}
-						{errors.length > 0 && <Notice tone="danger" title="Not saved — fix these first" items={errors} />}
-						{warnings.length > 0 && (
-							<Notice
-								tone="warning"
-								title={errors.length > 0 ? "Also review" : "Saved, but review these"}
-								items={warnings}
-								onDismiss={() => setWarnings([])}
-							/>
-						)}
-					</div>
-				)}
-
 				<SettingsSection
 					title="Snippet Settings"
 					description="Choose where the snippet loads and how it is delivered to your pages."
@@ -531,6 +570,37 @@ function SettingsPage() {
 					title="Code Snippet"
 					description="Paste the snippet exactly as your provider gives it. Wrap JavaScript in <script> tags and CSS in <style> tags. Unclosed tags block the save; risky patterns are flagged but still saved."
 				>
+					{(fallback || errors.length > 0 || warnings.length > 0) && (
+						<SettingRow>
+							<div ref={issuesRef} className="grid gap-3">
+								{errors.length > 0 && (
+									<Notice
+										tone="danger"
+										title="Not saved — fix these first"
+										items={errors}
+										onLineClick={jumpToLine}
+									/>
+								)}
+								{warnings.length > 0 && (
+									<Notice
+										tone="warning"
+										title={errors.length > 0 ? "Also review" : "Saved, but review these"}
+										items={warnings}
+										onLineClick={jumpToLine}
+										onDismiss={() => setWarnings([])}
+									/>
+								)}
+								{fallback && (
+									<Notice
+										tone="warning"
+										title="Minification turned off"
+										items={[fallback]}
+										onDismiss={() => setFallback(null)}
+									/>
+								)}
+							</div>
+						</SettingRow>
+					)}
 					<SettingRow>
 						<label htmlFor="scs-editor" className="sr-only">
 							Code snippet
@@ -542,6 +612,10 @@ function SettingsPage() {
 								theme={dark ? "tomorrow_night" : "tomorrow"}
 								value={code}
 								onChange={setCode}
+								onLoad={(editor) => {
+									editorRef.current = editor;
+								}}
+								annotations={annotations}
 								width="100%"
 								height="420px"
 								fontSize={13}
