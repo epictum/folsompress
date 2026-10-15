@@ -81,6 +81,10 @@ EmDash only lets trusted, native plugins output raw HTML and scripts (the `page:
 - **Who can edit.** Routes use EmDash's default `plugins:manage` permission, so only administrators can change the snippet. Anyone with that permission can run arbitrary script on your public site, which is the point of the plugin.
 - **One snippet.** Matching the PRD, there is one snippet with one placement. Put head and footer code in separate plugins or extend `SnippetConfig` to an array if you need both.
 
+## Dependencies
+
+`@cloudflare/kumo` is a peer dependency pinned to the version EmDash's admin uses (2.6.0 for EmDash 1.3). It has to match: the toast notifications only work when the plugin and the admin load the same copy of Kumo, because the toast provider is shared through React context. If EmDash moves to a newer Kumo, update the pin to match. `@phosphor-icons/react` is also a peer dependency, for the same reason.
+
 ## Edge caching
 
 If your site caches rendered pages (for example Astro route caching on Cloudflare), a saved snippet only appears once each cached page expires. Plugins can't purge the page cache themselves in EmDash 1.x, so add a small site middleware that purges after a successful save or delete:
@@ -111,6 +115,7 @@ Sites without page caching don't need this.
 
 ## Changelog
 
+- **1.2.0**: Saves, errors and deletes now show the admin's own toast notifications, describing what changed (for example "Placement has been changed to Footer."), instead of a banner that stays until dismissed. Code Placement uses Kumo's segmented Tabs, the same sliding control as the Comments page. Panels use the admin's flat bordered style with no drop shadow. Icons come from `@phosphor-icons/react`, like the rest of the admin. `@cloudflare/kumo` is now a peer dependency pinned to the admin's version (2.6.0), so the plugin shares the admin's Kumo and its toast provider.
 - **1.1.0**: Settings page redesign. Settings card in the order Code Placement, Enable snippet, Enable server-side minification, with visible descriptions instead of tooltips. Code editor in its own card with Save. Danger zone restyled with icons. Inline SVG icons, so there's no new dependency.
 - **1.0.0**: First release.
 
