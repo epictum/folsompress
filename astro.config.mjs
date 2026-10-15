@@ -4,6 +4,7 @@ import react from "@astrojs/react";
 import { d1, r2 } from "@emdash-cms/cloudflare";
 import { defineConfig, fontProviders } from "astro/config";
 import emdash from "emdash/astro";
+import { simpleCodeSnippetsPlugin } from "emdash-plugin-simple-code-snippets";
 
 // ---------------------------------------------------------------------------
 // Edge HTML cache (Cloudflare Workers Cache)
@@ -54,6 +55,8 @@ export default defineConfig({
 		emdash({
 			database: d1({ binding: "DB", session: "auto" }),
 			storage: r2({ binding: "MEDIA" }),
+			// Native plugin, lives in plugins/simple-code-snippets (pnpm workspace).
+			plugins: [simpleCodeSnippetsPlugin()],
 		}),
 	],
 	fonts: [
