@@ -4,10 +4,15 @@
  * Mounted at /_emdash/admin/plugins/simple-code-snippets/settings.
  * Layout (top to bottom): settings card (Code Placement, Enable snippet,
  * Enable server-side minification), code editor card with Save, Danger zone.
+ * Status messages use the admin's own toast notifications (Kumo toast
+ * manager); the placement switch uses Kumo's segmented Tabs, like Comments.
+ * Kumo must resolve to the same copy the admin uses, so it is a peer
+ * dependency pinned to the admin's version.
  * Ace editor is BSD-3 licensed; react-ace is MIT.
  */
 
-import { Button, Switch } from "@cloudflare/kumo";
+import { Button, Switch, Tabs, useKumoToastManager } from "@cloudflare/kumo";
+import { TrashIcon, WarningIcon } from "@phosphor-icons/react";
 import type { PluginAdminExports } from "emdash";
 import { apiFetch, getErrorMessage, parseApiResponse } from "emdash/plugin-utils";
 import * as React from "react";
@@ -44,52 +49,6 @@ function formatUpdated(iso: string): string {
 		: date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-// ── Icons (inline so the plugin has no icon-library dependency) ──
-
-function WarningIcon({ className }: { className?: string }) {
-	return (
-		<svg
-			className={className}
-			width="22"
-			height="22"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-			<line x1="12" y1="9" x2="12" y2="13" />
-			<line x1="12" y1="17" x2="12.01" y2="17" />
-		</svg>
-	);
-}
-
-function TrashIcon({ className }: { className?: string }) {
-	return (
-		<svg
-			className={className}
-			width="16"
-			height="16"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden="true"
-		>
-			<path d="M3 6h18" />
-			<path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
-			<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-			<line x1="10" y1="11" x2="10" y2="17" />
-			<line x1="14" y1="11" x2="14" y2="17" />
-		</svg>
-	);
-}
-
 // ── Building blocks ─────────────────────────────────────────────
 
 const PLACEMENT_OPTIONS: { value: Placement; label: string; hint: string }[] = [
@@ -106,39 +65,21 @@ function PlacementGroup({
 }) {
 	const hint = PLACEMENT_OPTIONS.find((o) => o.value === value)?.hint;
 	return (
-		<fieldset className="space-y-3">
-			<legend className="text-base font-medium">Code Placement</legend>
-			<div
-				role="radiogroup"
-				aria-label="Code placement"
-				aria-describedby="scs-placement-hint"
-				className="inline-flex rounded-lg border border-kumo-line bg-kumo-tint p-1"
-			>
-				{PLACEMENT_OPTIONS.map((opt) => {
-					const selected = value === opt.value;
-					return (
-						<button
-							key={opt.value}
-							type="button"
-							role="radio"
-							aria-checked={selected}
-							onClick={() => onChange(opt.value)}
-							className={
-								"w-24 py-1.5 text-sm rounded-md transition-colors " +
-								(selected
-									? "bg-kumo-brand text-white font-medium shadow-sm"
-									: "text-kumo-subtle hover:text-kumo-default")
-							}
-						>
-							{opt.label}
-						</button>
-					);
-				})}
+		<div className="space-y-3">
+			<div id="scs-placement-label" className="text-base font-medium">
+				Code Placement
 			</div>
-			<p id="scs-placement-hint" className="text-sm text-kumo-subtle">
-				{hint}
-			</p>
-		</fieldset>
+			<Tabs
+				aria-labelledby="scs-placement-label"
+				value={value}
+				onValueChange={(v) => {
+					if (v === "head" || v === "footer") onChange(v);
+				}}
+				tabs={PLACEMENT_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
+				className="w-fit"
+			/>
+			<p className="text-sm text-kumo-subtle">{hint}</p>
+		</div>
 	);
 }
 
@@ -178,27 +119,52 @@ function SettingRow({
 	);
 }
 
+const PLACEMENT_LABEL: Record<Placement, string> = { head: "Header", footer: "Footer" };
+
+/** Plain-language summary of what a save changed, for the toast. */
+function describeChanges(before: SnippetConfig, after: SnippetConfig): string {
+	const changes: string[] = [];
+	if (before.placement !== after.placement) {
+		changes.push(`Placement has been changed to ${PLACEMENT_LABEL[after.placement]}.`);
+	}
+	if (before.isEnabled !== after.isEnabled) {
+		changes.push(after.isEnabled ? "Snippet has been enabled." : "Snippet has been disabled.");
+	}
+	if (before.isMinified !== after.isMinified) {
+		changes.push(
+			after.isMinified ? "Minification has been turned on." : "Minification has been turned off.",
+		);
+	}
+	if ((before.codeContent ?? "") !== (after.codeContent ?? "")) {
+		changes.push("Code snippet has been updated.");
+	}
+	return changes.length > 0 ? changes.join(" ") : "No settings were changed.";
+}
+
 function Notice({
 	tone,
 	title,
 	items,
 	onDismiss,
 }: {
-	tone: "danger" | "warning" | "success";
+	tone: "danger" | "warning";
 	title: string;
 	items?: string[];
 	onDismiss?: () => void;
 }) {
+	// Same treatments the EmDash admin uses for inline error and warning callouts.
 	const styles = {
-		danger: "border-kumo-danger text-kumo-danger",
-		warning: "border-kumo-warning text-kumo-warning",
-		success: "border-kumo-line text-kumo-success",
+		danger: "border-kumo-danger/50 bg-kumo-danger/10",
+		warning: "border-kumo-warning/30 bg-kumo-warning/10",
 	}[tone];
+	const titleColor = tone === "danger" ? "text-kumo-danger" : "text-kumo-warning";
 	return (
-		<div role={tone === "success" ? "status" : "alert"} className={`rounded-md border px-4 py-3 ${styles}`}>
+		<div role="alert" className={`rounded-lg border p-4 ${styles}`}>
 			<div className="flex items-start justify-between gap-4">
 				<div className="space-y-1">
-					<div className="text-sm font-medium">{title}</div>
+					<div className={`text-sm font-medium ${titleColor}`}>
+							{title}
+						</div>
 					{items && items.length > 0 && (
 						<ul className="list-disc ps-5 text-sm text-kumo-default space-y-0.5">
 							{items.map((item) => (
@@ -274,6 +240,7 @@ function DeleteConfirmDialog({
 
 function SettingsPage() {
 	const dark = useDarkMode();
+	const toast = useKumoToastManager();
 
 	const [loaded, setLoaded] = React.useState<SnippetConfig | null>(null);
 	const [isEnabled, setIsEnabled] = React.useState(false);
@@ -286,7 +253,6 @@ function SettingsPage() {
 	const [errors, setErrors] = React.useState<string[]>([]);
 	const [warnings, setWarnings] = React.useState<string[]>([]);
 	const [fallback, setFallback] = React.useState<string | null>(null);
-	const [saved, setSaved] = React.useState(false);
 
 	const [showDelete, setShowDelete] = React.useState(false);
 	const [isDeleting, setIsDeleting] = React.useState(false);
@@ -327,7 +293,6 @@ function SettingsPage() {
 		setErrors([]);
 		setWarnings([]);
 		setFallback(null);
-		setSaved(false);
 		try {
 			const res = await apiFetch(`${API_BASE}/settings/save`, {
 				method: "POST",
@@ -335,20 +300,40 @@ function SettingsPage() {
 				body: JSON.stringify({ isEnabled, placement, isMinified, codeContent: code }),
 			});
 			if (!res.ok) {
-				setErrors([await getErrorMessage(res, "Saving failed.")]);
+				const message = await getErrorMessage(res, "Saving failed.");
+				setErrors([message]);
+				toast.add({ title: "Settings not saved", description: message, variant: "error" });
 				return;
 			}
 			const result = await parseApiResponse<SaveResult>(res);
-			setWarnings(result.warnings ?? []);
+			const resultWarnings = result.warnings ?? [];
+			setWarnings(resultWarnings);
 			if (!result.success || !result.config) {
-				setErrors(result.errors ?? ["Saving failed."]);
+				const resultErrors = result.errors ?? ["Saving failed."];
+				setErrors(resultErrors);
+				toast.add({
+					title: "Settings not saved",
+					description:
+						resultErrors.length === 1
+							? resultErrors[0]
+							: `${resultErrors.length} problems need fixing. See the details on this page.`,
+					variant: "error",
+				});
 				return;
 			}
+			const summary = loaded ? describeChanges(loaded, result.config) : "Your settings have been saved.";
 			applyConfig(result.config);
 			if (result.minifyFallback) setFallback(result.minifyFallback);
-			setSaved(true);
+			const needsReview = resultWarnings.length > 0 || Boolean(result.minifyFallback);
+			toast.add({
+				title: "Settings updated",
+				description: needsReview ? `${summary} Review the notes shown on this page.` : summary,
+				...(needsReview ? { variant: "warning" as const } : {}),
+			});
 		} catch {
-			setErrors(["Saving failed. Check your connection and try again."]);
+			const message = "Saving failed. Check your connection and try again.";
+			setErrors([message]);
+			toast.add({ title: "Settings not saved", description: message, variant: "error" });
 		} finally {
 			setIsSaving(false);
 		}
@@ -359,7 +344,9 @@ function SettingsPage() {
 		try {
 			const res = await apiFetch(`${API_BASE}/settings/delete`, { method: "POST" });
 			if (!res.ok) {
-				setErrors([await getErrorMessage(res, "Deleting settings failed.")]);
+				const message = await getErrorMessage(res, "Deleting settings failed.");
+				setErrors([message]);
+				toast.add({ title: "Settings not deleted", description: message, variant: "error" });
 				return;
 			}
 			const data = await parseApiResponse<{ config: SnippetConfig }>(res);
@@ -367,10 +354,14 @@ function SettingsPage() {
 			setErrors([]);
 			setWarnings([]);
 			setFallback(null);
-			setSaved(false);
 			setShowDelete(false);
+			toast.add({
+				title: "Settings deleted",
+				description: "Your snippet has been removed and all settings have been reset to their defaults.",
+			});
 		} catch {
 			setErrors(["Deleting settings failed."]);
+			toast.add({ title: "Settings not deleted", description: "Deleting settings failed.", variant: "error" });
 		} finally {
 			setIsDeleting(false);
 		}
@@ -393,12 +384,9 @@ function SettingsPage() {
 					onDismiss={() => setWarnings([])}
 				/>
 			)}
-			{saved && !fallback && warnings.length === 0 && (
-				<Notice tone="success" title="Settings saved" onDismiss={() => setSaved(false)} />
-			)}
 
 			{/* Settings */}
-			<section className="rounded-xl border border-kumo-line bg-kumo-base p-6 shadow-sm">
+			<section className="rounded-lg border bg-kumo-base p-6">
 				<h1 className="text-2xl font-semibold">Simple Code Snippets</h1>
 				<p className="mt-1 text-sm text-kumo-subtle">
 					Add analytics, tag managers, verification tags, or custom CSS and JavaScript to every public page.
@@ -430,7 +418,7 @@ function SettingsPage() {
 			</section>
 
 			{/* Code */}
-			<section className="rounded-xl border border-kumo-line bg-kumo-base p-6 shadow-sm space-y-4">
+			<section className="rounded-lg border bg-kumo-base p-6 space-y-4">
 				<div className="space-y-1">
 					<label htmlFor="scs-editor" className="text-base font-medium">
 						Code Snippet
@@ -477,20 +465,17 @@ function SettingsPage() {
 			</section>
 
 			{/* Danger zone */}
-			<section className="rounded-xl border border-kumo-danger bg-kumo-danger-tint p-6 space-y-3">
+			<section className="rounded-lg border border-kumo-danger/50 bg-kumo-danger/10 p-6 space-y-3">
 				<h2 className="flex items-center gap-2 text-lg font-semibold text-kumo-danger">
-					<WarningIcon />
+					<WarningIcon size={22} aria-hidden="true" />
 					Danger zone
 				</h2>
 				<p className="text-sm text-kumo-default">
 					Permanently delete stored snippets and reset all settings to default. We recommend doing this before
 					removing this plugin from your site configuration to ensure no data is left behind.
 				</p>
-				<Button variant="destructive" onClick={() => setShowDelete(true)}>
-					<span className="inline-flex items-center gap-2">
-						<TrashIcon />
-						Delete all settings
-					</span>
+				<Button variant="destructive" icon={TrashIcon} onClick={() => setShowDelete(true)}>
+					Delete all settings
 				</Button>
 			</section>
 
