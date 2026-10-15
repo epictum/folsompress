@@ -115,6 +115,7 @@ Sites without page caching don't need this.
 
 ## Changelog
 
+- **1.3.0**: Page layout follows the EmDash admin. The title and description sit outside the panels in a `PageHeader` (same markup as Redirects/Categories, with an actions slot on the right for future buttons). Settings are grouped into `SettingsSection` boxes like General Settings → Site Identity: section title above, rows inside, with hairline dividers running edge to edge.
 - **1.2.0**: Saves, errors and deletes now show the admin's own toast notifications, describing what changed (for example "Placement has been changed to Footer."), instead of a banner that stays until dismissed. Code Placement uses Kumo's segmented Tabs, the same sliding control as the Comments page. Panels use the admin's flat bordered style with no drop shadow. Icons come from `@phosphor-icons/react`, like the rest of the admin. `@cloudflare/kumo` is now a peer dependency pinned to the admin's version (2.6.0), so the plugin shares the admin's Kumo and its toast provider.
 - **1.1.0**: Settings page redesign. Settings card in the order Code Placement, Enable snippet, Enable server-side minification, with visible descriptions instead of tooltips. Code editor in its own card with Save. Danger zone restyled with icons. Inline SVG icons, so there's no new dependency.
 - **1.0.0**: First release.
