@@ -63,6 +63,30 @@ describe("validateSnippet", () => {
 		expect(validateSnippet("console.log('hi')").warnings.join(" ")).toMatch(/visible text/);
 	});
 
+	it("blocks a malformed closing tag that lets one script swallow the next", () => {
+		const code = [
+			'<script async src="https://example.com/gtag.js"></ dsfsfgh script>',
+			"<script>",
+			"  gtag('js', new Date());",
+			"</script>",
+		].join("\n");
+		const { errors } = validateSnippet(code);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toMatch(/^Line 1: "<\/ dsfsfgh script>" is not a valid closing tag.*Change it to <\/script>/);
+	});
+
+	it("blocks a new <script> that starts inside an unclosed one", () => {
+		const code = ['<script async src="https://example.com/a.js">', "<script>", "go();", "</script>"].join("\n");
+		expect(validateSnippet(code).errors[0]).toMatch(
+			/^Line 2: a new <script> starts inside the <script> opened on line 1\. Add <\/script> before line 2\./,
+		);
+	});
+
+	it("blocks code written inside an external <script src>", () => {
+		const code = '<script src="https://example.com/a.js">\n  go();\n</script>';
+		expect(validateSnippet(code).errors[0]).toMatch(/^Line 1: this <script> loads a src file, so browsers ignore/);
+	});
+
 	it("rejects oversized snippets", () => {
 		expect(validateSnippet("x".repeat(70 * 1024)).errors[0]).toMatch(/limit is 64 KB/);
 	});
@@ -96,13 +120,22 @@ describe("minifySnippet", () => {
 });
 
 describe("runPipeline", () => {
-	it("falls back to raw when Terser fails, and turns minification off", async () => {
-		const code = "<script>function (</script>";
-		const out = await runPipeline({ codeContent: code, isMinified: true });
-		expect(out.ok).toBe(true);
-		expect(out.isMinified).toBe(false);
-		expect(out.compiledContent).toBe(code);
-		expect(out.minifyFallback).toMatch(/Minification failed/);
+	it("blocks a JavaScript syntax error with the line to fix, minified or not", async () => {
+		const code = "<script>\nconsole.log(1);\nfunction (\n</script>";
+		for (const isMinified of [false, true]) {
+			const out = await runPipeline({ codeContent: code, isMinified });
+			expect(out.ok).toBe(false);
+			expect(out.errors[0]).toMatch(/^Line 3: JavaScript syntax error in the <script> that starts on line 1/);
+		}
+	});
+
+	it("blocks invalid JSON-LD even with minification off", async () => {
+		const out = await runPipeline({
+			codeContent: '<script type="application/ld+json">{"a":1,}</script>',
+			isMinified: false,
+		});
+		expect(out.ok).toBe(false);
+		expect(out.errors[0]).toMatch(/does not contain valid JSON/);
 	});
 
 	it("does not save when validation fails", async () => {
