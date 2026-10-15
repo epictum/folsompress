@@ -2,8 +2,10 @@
  * Simple Code Snippets — admin settings page
  *
  * Mounted at /_emdash/admin/plugins/simple-code-snippets/settings.
- * Layout (top to bottom): settings card (Code Placement, Enable snippet,
- * Enable server-side minification), code editor card with Save, Danger zone.
+ * Layout (top to bottom): PageHeader (title, description, actions slot),
+ * "Snippet Settings" section (Code Placement, Enable snippet, Enable
+ * server-side minification), "Code Snippet" section with Save, Danger zone.
+ * PageHeader / SettingsSection / SettingRow mirror the EmDash admin's own.
  * Status messages use the admin's own toast notifications (Kumo toast
  * manager); the placement switch uses Kumo's segmented Tabs, like Comments.
  * Kumo must resolve to the same copy the admin uses, so it is a peer
@@ -49,6 +51,104 @@ function formatUpdated(iso: string): string {
 		: date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
+// ── Layout primitives ───────────────────────────────────────────
+// Same markup and classes as the EmDash admin's own PageHeader,
+// SettingsSection and SettingRow (packages/admin), so the page reads as
+// native and stays easy to extend (e.g. header action buttons).
+
+function cx(...classes: Array<string | false | null | undefined>): string {
+	return classes.filter(Boolean).join(" ");
+}
+
+/**
+ * Page title, description and an optional actions slot on the right
+ * (like "New Redirect" or "Add Category"). `tabs`/`tools` render the
+ * optional second row EmDash uses on pages such as Redirects.
+ */
+function PageHeader({
+	title,
+	description,
+	actions,
+	tabs,
+	tools,
+	className,
+}: {
+	title: React.ReactNode;
+	description?: React.ReactNode;
+	actions?: React.ReactNode;
+	tabs?: React.ReactNode;
+	tools?: React.ReactNode;
+	className?: string;
+}) {
+	const hasSecondRow = Boolean(tabs || tools);
+	return (
+		<header className={cx("grid min-w-0 gap-4", hasSecondRow && "border-b border-kumo-line pb-4", className)}>
+			<div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
+				<h1 className="flex min-h-9 min-w-0 items-center text-2xl font-semibold leading-tight">{title}</h1>
+				{actions && <div className="flex shrink-0 justify-end gap-2">{actions}</div>}
+				{description && (
+					<p className="col-span-2 text-sm leading-5 text-pretty text-kumo-subtle">{description}</p>
+				)}
+			</div>
+			{hasSecondRow && (
+				<div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+					<div className="min-w-0">{tabs}</div>
+					{tools && (
+						<div className="grid min-w-0 flex-1 gap-2 sm:flex sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
+							{tools}
+						</div>
+					)}
+				</div>
+			)}
+		</header>
+	);
+}
+
+/** Titled group of rows in one bordered box; dividers run edge to edge. */
+function SettingsSection({
+	title,
+	description,
+	actions,
+	contentClassName,
+	children,
+}: {
+	title: React.ReactNode;
+	description?: React.ReactNode;
+	actions?: React.ReactNode;
+	contentClassName?: string;
+	children: React.ReactNode;
+}) {
+	const headingId = React.useId();
+	return (
+		<section aria-labelledby={headingId}>
+			<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+				<div className="grid gap-1">
+					<h2 id={headingId} className="text-lg font-semibold leading-6 text-balance">
+						{title}
+					</h2>
+					{description && (
+						<p className="max-w-2xl text-sm leading-5 text-pretty text-kumo-subtle">{description}</p>
+					)}
+				</div>
+				{actions && <div className="flex shrink-0 justify-end sm:pt-0.5">{actions}</div>}
+			</div>
+			<div
+				className={cx(
+					"mt-3 divide-y divide-kumo-line overflow-hidden rounded-xl border border-kumo-line bg-kumo-base",
+					contentClassName,
+				)}
+			>
+				{children}
+			</div>
+		</section>
+	);
+}
+
+/** One row inside a SettingsSection. */
+function SettingRow({ children, className }: { children: React.ReactNode; className?: string }) {
+	return <div className={cx("px-4 py-4", className)}>{children}</div>;
+}
+
 // ── Building blocks ─────────────────────────────────────────────
 
 const PLACEMENT_OPTIONS: { value: Placement; label: string; hint: string }[] = [
@@ -84,7 +184,7 @@ function PlacementGroup({
 }
 
 /** A labelled on/off setting: title and description on the start side, switch on the end side. */
-function SettingRow({
+function ToggleRow({
 	id,
 	title,
 	description,
@@ -371,113 +471,121 @@ function SettingsPage() {
 	if (!loaded) return <div className="py-12 text-center text-sm text-kumo-subtle">Loading…</div>;
 
 	return (
-		<div className="max-w-4xl space-y-6">
-			{fallback && (
-				<Notice tone="warning" title="Minification turned off" items={[fallback]} onDismiss={() => setFallback(null)} />
-			)}
-			{errors.length > 0 && <Notice tone="danger" title="Not saved — fix these first" items={errors} />}
-			{warnings.length > 0 && (
-				<Notice
-					tone="warning"
-					title={errors.length > 0 ? "Also review" : "Saved, but review these"}
-					items={warnings}
-					onDismiss={() => setWarnings([])}
-				/>
-			)}
+		<div className="max-w-4xl pb-6">
+			<PageHeader
+				title="Simple Code Snippets"
+				description="Add analytics, tag managers, verification tags, or custom CSS and JavaScript to every public page."
+			/>
 
-			{/* Settings */}
-			<section className="rounded-lg border bg-kumo-base p-6">
-				<h1 className="text-2xl font-semibold">Simple Code Snippets</h1>
-				<p className="mt-1 text-sm text-kumo-subtle">
-					Add analytics, tag managers, verification tags, or custom CSS and JavaScript to every public page.
-				</p>
-
-				<div className="mt-6 divide-y divide-kumo-line">
-					<div className="pb-6">
-						<PlacementGroup value={placement} onChange={setPlacement} />
+			<div className="mt-6 grid gap-8">
+				{(fallback || errors.length > 0 || warnings.length > 0) && (
+					<div className="grid gap-3">
+						{fallback && (
+							<Notice
+								tone="warning"
+								title="Minification turned off"
+								items={[fallback]}
+								onDismiss={() => setFallback(null)}
+							/>
+						)}
+						{errors.length > 0 && <Notice tone="danger" title="Not saved — fix these first" items={errors} />}
+						{warnings.length > 0 && (
+							<Notice
+								tone="warning"
+								title={errors.length > 0 ? "Also review" : "Saved, but review these"}
+								items={warnings}
+								onDismiss={() => setWarnings([])}
+							/>
+						)}
 					</div>
-					<div className="py-6">
-						<SettingRow
+				)}
+
+				<SettingsSection
+					title="Snippet Settings"
+					description="Choose where the snippet loads and how it is delivered to your pages."
+				>
+					<SettingRow>
+						<PlacementGroup value={placement} onChange={setPlacement} />
+					</SettingRow>
+					<SettingRow>
+						<ToggleRow
 							id="scs-enabled"
 							title="Enable snippet"
 							description="When disabled, nothing is added to your pages. Your snippet is saved."
 							checked={isEnabled}
 							onCheckedChange={setIsEnabled}
 						/>
-					</div>
-					<div className="pt-6">
-						<SettingRow
+					</SettingRow>
+					<SettingRow>
+						<ToggleRow
 							id="scs-minify"
 							title="Enable server-side minification"
 							description="Minifies inline JavaScript and compacts HTML and CSS. The editor keeps your original formatting."
 							checked={isMinified}
 							onCheckedChange={setIsMinified}
 						/>
-					</div>
-				</div>
-			</section>
+					</SettingRow>
+				</SettingsSection>
 
-			{/* Code */}
-			<section className="rounded-lg border bg-kumo-base p-6 space-y-4">
-				<div className="space-y-1">
-					<label htmlFor="scs-editor" className="text-base font-medium">
-						Code Snippet
-					</label>
-					<p className="text-sm text-kumo-subtle">
-						Paste the snippet exactly as your provider gives it. Wrap JavaScript in &lt;script&gt; tags and CSS
-						in &lt;style&gt; tags. Unclosed tags block the save; risky patterns are flagged but still saved.
+				<SettingsSection
+					title="Code Snippet"
+					description="Paste the snippet exactly as your provider gives it. Wrap JavaScript in <script> tags and CSS in <style> tags. Unclosed tags block the save; risky patterns are flagged but still saved."
+				>
+					<SettingRow>
+						<label htmlFor="scs-editor" className="sr-only">
+							Code snippet
+						</label>
+						<div className="overflow-hidden rounded-md border border-kumo-line">
+							<AceEditor
+								name="scs-editor"
+								mode="html"
+								theme={dark ? "tomorrow_night" : "tomorrow"}
+								value={code}
+								onChange={setCode}
+								width="100%"
+								height="420px"
+								fontSize={13}
+								showGutter
+								showPrintMargin={false}
+								highlightActiveLine
+								wrapEnabled
+								editorProps={{ $blockScrolling: true }}
+								setOptions={{
+									showLineNumbers: true,
+									tabSize: 2,
+									useSoftTabs: true,
+									// Validation runs on the server; skip Ace's web worker.
+									useWorker: false,
+								}}
+								placeholder={'<script>\n  // your code\n</script>'}
+							/>
+						</div>
+					</SettingRow>
+					<SettingRow className="flex items-center justify-between gap-4">
+						<span className="text-sm text-kumo-subtle">
+							Last updated {formatUpdated(loaded.updatedAt)}
+							{isDirty && " · Unsaved changes"}
+						</span>
+						<Button variant="primary" onClick={() => void handleSave()} disabled={isSaving || !isDirty}>
+							{isSaving ? "Saving…" : "Save settings"}
+						</Button>
+					</SettingRow>
+				</SettingsSection>
+
+				<section className="rounded-xl border border-kumo-danger/50 bg-kumo-danger/10 p-4 space-y-3">
+					<h2 className="flex items-center gap-2 text-lg font-semibold leading-6 text-kumo-danger">
+						<WarningIcon size={22} aria-hidden="true" />
+						Danger zone
+					</h2>
+					<p className="text-sm text-kumo-default">
+						Permanently delete stored snippets and reset all settings to default. We recommend doing this before
+						removing this plugin from your site configuration to ensure no data is left behind.
 					</p>
-				</div>
-				<div className="overflow-hidden rounded-md border border-kumo-line">
-					<AceEditor
-						name="scs-editor"
-						mode="html"
-						theme={dark ? "tomorrow_night" : "tomorrow"}
-						value={code}
-						onChange={setCode}
-						width="100%"
-						height="420px"
-						fontSize={13}
-						showGutter
-						showPrintMargin={false}
-						highlightActiveLine
-						wrapEnabled
-						editorProps={{ $blockScrolling: true }}
-						setOptions={{
-							showLineNumbers: true,
-							tabSize: 2,
-							useSoftTabs: true,
-							// Validation runs on the server; skip Ace's web worker.
-							useWorker: false,
-						}}
-						placeholder={'<script>\n  // your code\n</script>'}
-					/>
-				</div>
-				<div className="flex items-center justify-between gap-4">
-					<span className="text-sm text-kumo-subtle">
-						Last updated {formatUpdated(loaded.updatedAt)}
-						{isDirty && " · Unsaved changes"}
-					</span>
-					<Button variant="primary" onClick={() => void handleSave()} disabled={isSaving || !isDirty}>
-						{isSaving ? "Saving…" : "Save settings"}
+					<Button variant="destructive" icon={TrashIcon} onClick={() => setShowDelete(true)}>
+						Delete all settings
 					</Button>
-				</div>
-			</section>
-
-			{/* Danger zone */}
-			<section className="rounded-lg border border-kumo-danger/50 bg-kumo-danger/10 p-6 space-y-3">
-				<h2 className="flex items-center gap-2 text-lg font-semibold text-kumo-danger">
-					<WarningIcon size={22} aria-hidden="true" />
-					Danger zone
-				</h2>
-				<p className="text-sm text-kumo-default">
-					Permanently delete stored snippets and reset all settings to default. We recommend doing this before
-					removing this plugin from your site configuration to ensure no data is left behind.
-				</p>
-				<Button variant="destructive" icon={TrashIcon} onClick={() => setShowDelete(true)}>
-					Delete all settings
-				</Button>
-			</section>
+				</section>
+			</div>
 
 			{showDelete && (
 				<DeleteConfirmDialog
