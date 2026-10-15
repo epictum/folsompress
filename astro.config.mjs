@@ -28,7 +28,12 @@ const SWR = 86400; // seconds a stale page may be served while refreshing
 // That covers responses rendered *before* the content existed (e.g. the
 // redirect to /404 for a page slug you haven't published yet) and the RSS
 // feed, neither of which carry EmDash's own per-entry cache hints.
-const edge = (...tags) => ({ maxAge: MAX_AGE, swr: SWR, tags });
+//
+// Every rule also carries SITE_TAG, so changes that affect every page (e.g.
+// the Simple Code Snippets plugin, see src/middleware.ts) can purge them all.
+// Keep in sync with SITE_TAG in src/middleware.ts.
+const SITE_TAG = "site";
+const edge = (...tags) => ({ maxAge: MAX_AGE, swr: SWR, tags: [...tags, SITE_TAG] });
 
 export default defineConfig({
 	output: "server",
