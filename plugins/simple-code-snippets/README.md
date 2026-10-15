@@ -4,8 +4,8 @@ An EmDash CMS plugin that inserts one custom snippet — JavaScript, CSS, or raw
 
 ## Features
 
-- **Master switch** to turn injection on and off without losing the snippet.
-- **Header / Footer** placement as a two-button group.
+- **Code Placement**: a Header / Footer button group, with a line under it saying exactly where the snippet loads.
+- **Enable snippet** switch to turn injection on and off without losing the snippet.
 - **Server-side minification** (Terser for inline JS, plus compact CSS and JSON-LD). The editor keeps your original formatting; pages receive the minified copy.
 - **Ace editor** with line numbers and HTML/JS/CSS highlighting, following the admin's light/dark mode. Ace is BSD-3 licensed and react-ace is MIT, so both are fine for commercial use.
 - **Validation on save**: unclosed `<script>`/`<style>` tags block the save, with line numbers.
@@ -80,6 +80,39 @@ EmDash only lets trusted, native plugins output raw HTML and scripts (the `page:
 - **Per-request cost.** Each public page render does one small KV read for the snippet.
 - **Who can edit.** Routes use EmDash's default `plugins:manage` permission, so only administrators can change the snippet. Anyone with that permission can run arbitrary script on your public site, which is the point of the plugin.
 - **One snippet.** Matching the PRD, there is one snippet with one placement. Put head and footer code in separate plugins or extend `SnippetConfig` to an array if you need both.
+
+## Edge caching
+
+If your site caches rendered pages (for example Astro route caching on Cloudflare), a saved snippet only appears once each cached page expires. Plugins can't purge the page cache themselves in EmDash 1.x, so add a small site middleware that purges after a successful save or delete:
+
+```ts
+// src/middleware.ts
+import { defineMiddleware } from "astro:middleware";
+
+const SNIPPET_WRITE_ROUTE =
+	/^\/_emdash\/api\/plugins\/simple-code-snippets\/settings\/(save|delete)\/?$/;
+
+export const onRequest = defineMiddleware(async (context, next) => {
+	const response = await next();
+	if (
+		context.request.method === "POST" &&
+		response.ok &&
+		SNIPPET_WRITE_ROUTE.test(context.url.pathname) &&
+		context.cache?.enabled
+	) {
+		// "site" must be a tag that every cached route carries (add it to each routeRules entry).
+		await context.cache.invalidate({ tags: ["site"] }).catch(() => {});
+	}
+	return response;
+});
+```
+
+Sites without page caching don't need this.
+
+## Changelog
+
+- **1.1.0**: Settings page redesign. Settings card in the order Code Placement, Enable snippet, Enable server-side minification, with visible descriptions instead of tooltips. Code editor in its own card with Save. Danger zone restyled with icons. Inline SVG icons, so there's no new dependency.
+- **1.0.0**: First release.
 
 ## Development
 
