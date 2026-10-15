@@ -2,8 +2,9 @@
  * Simple Code Snippets — admin settings page
  *
  * Mounted at /_emdash/admin/plugins/simple-code-snippets/settings.
- * Controls (PRD §3.2): master switch, Header/Footer button group,
- * minification switch, Ace editor (BSD-3 licensed; react-ace is MIT).
+ * Layout (top to bottom): settings card (Code Placement, Enable snippet,
+ * Enable server-side minification), code editor card with Save, Danger zone.
+ * Ace editor is BSD-3 licensed; react-ace is MIT.
  */
 
 import { Button, Switch } from "@cloudflare/kumo";
@@ -43,7 +44,58 @@ function formatUpdated(iso: string): string {
 		: date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
+// ── Icons (inline so the plugin has no icon-library dependency) ──
+
+function WarningIcon({ className }: { className?: string }) {
+	return (
+		<svg
+			className={className}
+			width="22"
+			height="22"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+			<line x1="12" y1="9" x2="12" y2="13" />
+			<line x1="12" y1="17" x2="12.01" y2="17" />
+		</svg>
+	);
+}
+
+function TrashIcon({ className }: { className?: string }) {
+	return (
+		<svg
+			className={className}
+			width="16"
+			height="16"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<path d="M3 6h18" />
+			<path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+			<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+			<line x1="10" y1="11" x2="10" y2="17" />
+			<line x1="14" y1="11" x2="14" y2="17" />
+		</svg>
+	);
+}
+
 // ── Building blocks ─────────────────────────────────────────────
+
+const PLACEMENT_OPTIONS: { value: Placement; label: string; hint: string }[] = [
+	{ value: "head", label: "Header", hint: "Load code snippet inside <head>" },
+	{ value: "footer", label: "Footer", hint: "Load code snippet just before </body>" },
+];
 
 function PlacementGroup({
 	value,
@@ -52,19 +104,17 @@ function PlacementGroup({
 	value: Placement;
 	onChange: (value: Placement) => void;
 }) {
-	const options: { value: Placement; label: string; hint: string }[] = [
-		{ value: "head", label: "Header", hint: "Inside <head>" },
-		{ value: "footer", label: "Footer", hint: "Before </body>" },
-	];
+	const hint = PLACEMENT_OPTIONS.find((o) => o.value === value)?.hint;
 	return (
-		<fieldset className="space-y-2">
-			<legend className="text-sm font-medium">Placement</legend>
+		<fieldset className="space-y-3">
+			<legend className="text-base font-medium">Code Placement</legend>
 			<div
 				role="radiogroup"
-				aria-label="Placement"
-				className="inline-flex rounded-md border border-kumo-line p-0.5 bg-kumo-base"
+				aria-label="Code placement"
+				aria-describedby="scs-placement-hint"
+				className="inline-flex rounded-lg border border-kumo-line bg-kumo-tint p-1"
 			>
-				{options.map((opt) => {
+				{PLACEMENT_OPTIONS.map((opt) => {
 					const selected = value === opt.value;
 					return (
 						<button
@@ -74,10 +124,10 @@ function PlacementGroup({
 							aria-checked={selected}
 							onClick={() => onChange(opt.value)}
 							className={
-								"px-4 py-1.5 text-sm rounded transition-colors " +
+								"w-24 py-1.5 text-sm rounded-md transition-colors " +
 								(selected
-									? "bg-kumo-brand text-white font-medium"
-									: "text-kumo-subtle hover:bg-kumo-tint")
+									? "bg-kumo-brand text-white font-medium shadow-sm"
+									: "text-kumo-subtle hover:text-kumo-default")
 							}
 						>
 							{opt.label}
@@ -85,10 +135,46 @@ function PlacementGroup({
 					);
 				})}
 			</div>
-			<p className="text-xs text-kumo-subtle">
-				{options.find((o) => o.value === value)?.hint}
+			<p id="scs-placement-hint" className="text-sm text-kumo-subtle">
+				{hint}
 			</p>
 		</fieldset>
+	);
+}
+
+/** A labelled on/off setting: title and description on the start side, switch on the end side. */
+function SettingRow({
+	id,
+	title,
+	description,
+	checked,
+	onCheckedChange,
+}: {
+	id: string;
+	title: string;
+	description: string;
+	checked: boolean;
+	onCheckedChange: (checked: boolean) => void;
+}) {
+	return (
+		<div className="flex items-start justify-between gap-6">
+			<div className="space-y-1">
+				<div id={`${id}-title`} className="text-base font-medium">
+					{title}
+				</div>
+				<p id={`${id}-desc`} className="text-sm text-kumo-subtle">
+					{description}
+				</p>
+			</div>
+			<div className="shrink-0 pt-1">
+				<Switch
+					checked={checked}
+					onCheckedChange={onCheckedChange}
+					aria-labelledby={`${id}-title`}
+					aria-describedby={`${id}-desc`}
+				/>
+			</div>
+		</div>
 	);
 }
 
@@ -295,13 +381,6 @@ function SettingsPage() {
 
 	return (
 		<div className="max-w-4xl space-y-6">
-			<header className="space-y-1">
-				<h1 className="text-2xl font-semibold">Simple Code Snippets</h1>
-				<p className="text-sm text-kumo-subtle">
-					Add analytics, tag managers, or custom CSS and JavaScript to every public page.
-				</p>
-			</header>
-
 			{fallback && (
 				<Notice tone="warning" title="Minification turned off" items={[fallback]} onDismiss={() => setFallback(null)} />
 			)}
@@ -318,32 +397,48 @@ function SettingsPage() {
 				<Notice tone="success" title="Settings saved" onDismiss={() => setSaved(false)} />
 			)}
 
-			<section className="rounded-lg border border-kumo-line bg-kumo-base p-5 space-y-5">
-				<Switch
-					checked={isEnabled}
-					onCheckedChange={setIsEnabled}
-					label="Enable snippet"
-					labelTooltip="When off, nothing is added to your pages. Your snippet is kept."
-					controlFirst={false}
-				/>
-				<PlacementGroup value={placement} onChange={setPlacement} />
-				<Switch
-					checked={isMinified}
-					onCheckedChange={setIsMinified}
-					label="Enable server-side minification"
-					labelTooltip="Minifies inline JavaScript with Terser and compacts CSS and JSON. The editor keeps your original formatting."
-					controlFirst={false}
-				/>
+			{/* Settings */}
+			<section className="rounded-xl border border-kumo-line bg-kumo-base p-6 shadow-sm">
+				<h1 className="text-2xl font-semibold">Simple Code Snippets</h1>
+				<p className="mt-1 text-sm text-kumo-subtle">
+					Add analytics, tag managers, verification tags, or custom CSS and JavaScript to every public page.
+				</p>
+
+				<div className="mt-6 divide-y divide-kumo-line">
+					<div className="pb-6">
+						<PlacementGroup value={placement} onChange={setPlacement} />
+					</div>
+					<div className="py-6">
+						<SettingRow
+							id="scs-enabled"
+							title="Enable snippet"
+							description="When disabled, nothing is added to your pages. Your snippet is saved."
+							checked={isEnabled}
+							onCheckedChange={setIsEnabled}
+						/>
+					</div>
+					<div className="pt-6">
+						<SettingRow
+							id="scs-minify"
+							title="Enable server-side minification"
+							description="Minifies inline JavaScript and compacts HTML and CSS. The editor keeps your original formatting."
+							checked={isMinified}
+							onCheckedChange={setIsMinified}
+						/>
+					</div>
+				</div>
 			</section>
 
-			<section className="space-y-2">
-				<div className="flex items-baseline justify-between">
-					<label htmlFor="scs-editor" className="text-sm font-medium">
-						Code
+			{/* Code */}
+			<section className="rounded-xl border border-kumo-line bg-kumo-base p-6 shadow-sm space-y-4">
+				<div className="space-y-1">
+					<label htmlFor="scs-editor" className="text-base font-medium">
+						Code Snippet
 					</label>
-					<span className="text-xs text-kumo-subtle">
-						Wrap JavaScript in &lt;script&gt; and CSS in &lt;style&gt;
-					</span>
+					<p className="text-sm text-kumo-subtle">
+						Paste the snippet exactly as your provider gives it. Wrap JavaScript in &lt;script&gt; tags and CSS
+						in &lt;style&gt; tags. Unclosed tags block the save; risky patterns are flagged but still saved.
+					</p>
 				</div>
 				<div className="overflow-hidden rounded-md border border-kumo-line">
 					<AceEditor
@@ -370,26 +465,32 @@ function SettingsPage() {
 						placeholder={'<script>\n  // your code\n</script>'}
 					/>
 				</div>
+				<div className="flex items-center justify-between gap-4">
+					<span className="text-sm text-kumo-subtle">
+						Last updated {formatUpdated(loaded.updatedAt)}
+						{isDirty && " · Unsaved changes"}
+					</span>
+					<Button variant="primary" onClick={() => void handleSave()} disabled={isSaving || !isDirty}>
+						{isSaving ? "Saving…" : "Save settings"}
+					</Button>
+				</div>
 			</section>
 
-			<div className="flex items-center justify-between gap-4">
-				<span className="text-xs text-kumo-subtle">
-					Last updated {formatUpdated(loaded.updatedAt)}
-					{isDirty && " · Unsaved changes"}
-				</span>
-				<Button variant="primary" onClick={() => void handleSave()} disabled={isSaving || !isDirty}>
-					{isSaving ? "Saving…" : "Save settings"}
-				</Button>
-			</div>
-
-			<section className="rounded-lg border border-kumo-danger p-5 space-y-3">
-				<h2 className="text-sm font-semibold text-kumo-danger">Danger zone</h2>
-				<p className="text-sm text-kumo-subtle">
-					Remove the stored snippet and reset every setting to its default. Do this before taking the
-					plugin out of your site config if you want no data left behind.
+			{/* Danger zone */}
+			<section className="rounded-xl border border-kumo-danger bg-kumo-danger-tint p-6 space-y-3">
+				<h2 className="flex items-center gap-2 text-lg font-semibold text-kumo-danger">
+					<WarningIcon />
+					Danger zone
+				</h2>
+				<p className="text-sm text-kumo-default">
+					Permanently delete stored snippets and reset all settings to default. We recommend doing this before
+					removing this plugin from your site configuration to ensure no data is left behind.
 				</p>
 				<Button variant="destructive" onClick={() => setShowDelete(true)}>
-					Delete all settings
+					<span className="inline-flex items-center gap-2">
+						<TrashIcon />
+						Delete all settings
+					</span>
 				</Button>
 			</section>
 
