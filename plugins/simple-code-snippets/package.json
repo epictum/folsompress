@@ -1,6 +1,6 @@
 {
 	"name": "emdash-plugin-simple-code-snippets",
-	"version": "1.4.0",
+	"version": "1.4.1",
 	"description": "Insert custom JavaScript, CSS, or HTML into the <head> or before </body> on every public EmDash page.",
 	"type": "module",
 	"main": "src/descriptor.ts",
