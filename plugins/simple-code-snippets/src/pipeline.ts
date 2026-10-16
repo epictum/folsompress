@@ -141,70 +141,208 @@ export interface ValidationResult {
 	warnings: string[];
 }
 
-/** Anything that looks like a closing script/style tag, well-formed or not. */
-const ANY_RAW_CLOSE_RE = /<\/[^<>]*?\b(script|style)\b[^<>]*>/gi;
-const PROPER_RAW_CLOSE_RE = /^<\/(script|style)\s*>$/i;
-/** An opening script/style tag at the start of a line (a real tag, not a string). */
-const LINE_START_OPEN_RE = /(^|\n)([ \t]*)<(script|style)\b[^>]*>/gi;
+/** Real HTML elements whose names happen to be close to "script"/"style". */
+const KNOWN_ELEMENTS = new Set([
+	"noscript", "strike", "strong", "small", "slot", "span", "select", "source", "section",
+	"summary", "sub", "sup", "samp", "svg", "table", "title", "time", "track", "tspan",
+]);
 
-function countLines(text: string): number {
-	let n = 0;
-	for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
-	return n;
+function editDistance(a: string, b: string): number {
+	const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+	for (let i = 1; i <= a.length; i++) {
+		let prev = row[0]!;
+		row[0] = i;
+		for (let j = 1; j <= b.length; j++) {
+			const tmp = row[j]!;
+			row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+			prev = tmp;
+		}
+	}
+	return row[b.length]!;
 }
 
-/**
- * Structural mistakes that still "balance" under HTML parsing rules but
- * break the snippet in the browser, e.g. a malformed `</ script>` that
- * makes one script swallow the next.
- */
-function findStructuralErrors(code: string, segments: Segment[]): string[] {
-	const found: Array<{ line: number; message: string }> = [];
+/** "scrrript" → "script", "stlye" → "style"; null for exact or unrelated names. */
+function misspellingOf(name: string): RawTextTag | null {
+	if (name === "script" || name === "style" || name.length < 4 || KNOWN_ELEMENTS.has(name)) return null;
+	if (editDistance(name, "script") <= 2) return "script";
+	if (editDistance(name, "style") <= 2) return "style";
+	return null;
+}
 
-	// 1. Malformed closing tags such as `</ script>` or `</ foo script>`.
-	const badCloseLines = new Set<number>();
-	for (const m of code.matchAll(ANY_RAW_CLOSE_RE)) {
-		if (PROPER_RAW_CLOSE_RE.test(m[0])) continue;
-		const line = lineAt(code, m.index ?? 0);
-		const tag = m[1]!.toLowerCase();
-		badCloseLines.add(line);
-		found.push({
-			line,
-			message: `Line ${line}: "${m[0]}" is not a valid closing tag, so the <${tag}> before it keeps running past this point. Change it to </${tag}>.`,
+const ANY_CLOSE_RE = /<\/([^<>]*)>/g;
+const ANY_OPEN_NAME_RE = /<([a-z][a-z0-9-]*)\b[^<>]*>/gi;
+/** An opening script/style tag at the start of a line (a real tag, not a string). */
+const LINE_START_OPEN_RE = /(^|\n)[ \t]*(<(script|style)\b[^>]*>)/gi;
+
+type Problem = { line: number; message: string };
+
+/**
+ * Every tag problem in the snippet, in line order. Unlike a strict parse,
+ * this keeps going after the first problem so all of them can be fixed in
+ * one pass, and it reports root causes (a misspelled `</scrrript>`) rather
+ * than their knock-on effects (the `<script>` that therefore never closes).
+ */
+export interface TagReport {
+	/** Blocking problems, in line order. */
+	errors: string[];
+	/** Script/style blocks that are well-formed, safe to syntax-check. */
+	cleanBlocks: RawTextBlock[];
+}
+
+export function findTagProblems(code: string): TagReport {
+	const problems: Problem[] = [];
+	const cleanBlocks: RawTextBlock[] = [];
+	const at = (index: number) => lineAt(code, index);
+
+	// A. Closing tags that are malformed or misspelled, anywhere in the snippet.
+	const badCloses: Array<{ index: number; end: number }> = [];
+	for (const m of code.matchAll(ANY_CLOSE_RE)) {
+		const name = m[1]!.trim().toLowerCase();
+		if (name === "script" || name === "style") continue;
+		const index = m.index ?? 0;
+		const embedded = /\b(script|style)\b/.exec(name)?.[1] as RawTextTag | undefined;
+		const guess = embedded ?? (/^[a-z][a-z0-9-]*$/.test(name) ? misspellingOf(name) : null);
+		if (!guess) continue;
+		badCloses.push({ index, end: index + m[0].length });
+		problems.push({
+			line: at(index),
+			message: embedded
+				? `Line ${at(index)}: "${m[0]}" is not a valid closing tag, so the <${guess}> before it keeps running past this point. Change it to </${guess}>.`
+				: `Line ${at(index)}: "${m[0]}" looks like a misspelled </${guess}>, so the <${guess}> before it never closes. Change it to </${guess}>.`,
 		});
 	}
 
-	for (const seg of segments) {
-		if (seg.kind !== "raw") continue;
-		const { block } = seg;
-		const lastLine = block.bodyLine + countLines(block.body);
-		// A malformed closer inside this block is the root cause; don't pile on.
-		let rootCauseInside = false;
-		for (const l of badCloseLines) if (l >= block.line && l <= lastLine) rootCauseInside = true;
-		if (rootCauseInside) continue;
+	// B. Opening tags that look like a misspelled <script> or <style>.
+	const badOpens: Array<{ index: number; tag: RawTextTag }> = [];
+	for (const m of code.matchAll(ANY_OPEN_NAME_RE)) {
+		const guess = misspellingOf(m[1]!.toLowerCase());
+		if (!guess) continue;
+		const index = m.index ?? 0;
+		badOpens.push({ index, tag: guess });
+		problems.push({
+			line: at(index),
+			message: `Line ${at(index)}: "<${m[1]}…>" looks like a misspelled <${guess}>. Browsers won't treat it as ${guess === "script" ? "JavaScript" : "CSS"}. Change it to <${guess}>.`,
+		});
+	}
 
-		// 2. A new <script>/<style> starting on its own line inside a block.
-		LINE_START_OPEN_RE.lastIndex = 0;
-		const nested = LINE_START_OPEN_RE.exec(block.body);
-		if (nested) {
-			const line = block.bodyLine + countLines(block.body.slice(0, nested.index + nested[1]!.length));
-			found.push({
+	/** First malformed closer in [from, to): where the author meant the block to end. */
+	const badCloseIn = (from: number, to: number) => badCloses.find((b) => b.index >= from && b.index < to);
+	const nextLineStartOpen = (from: number): { index: number; tag: string } | null => {
+		LINE_START_OPEN_RE.lastIndex = from;
+		const m = LINE_START_OPEN_RE.exec(code);
+		if (!m) return null;
+		return {
+			index: m.index + m[1]!.length + (m[0].length - m[1]!.length - m[2]!.length),
+			tag: m[3]!.toLowerCase(),
+		};
+	};
+	const strayCloses = (from: number, to: number) => {
+		for (const m of code.slice(from, to).matchAll(STRAY_CLOSE_RE)) {
+			const index = from + (m.index ?? 0);
+			const tag = m[1]!.toLowerCase();
+			// The closer for a misspelled opener: the misspelling is already reported.
+			if (badOpens.some((b) => b.tag === tag && b.index >= from && b.index < index)) continue;
+			const line = at(index);
+			problems.push({
 				line,
-				message: `Line ${line}: a new <${nested[3]!.toLowerCase()}> starts inside the <${block.tag}> opened on line ${block.line}. Add </${block.tag}> before line ${line}.`,
+				message: `Line ${line}: closing </${tag}> has no matching opening tag.`,
 			});
+		}
+	};
+
+	// C. Walk script/style blocks the way a browser does, recovering after each problem.
+	let cursor = 0;
+	for (;;) {
+		RAW_OPEN_RE.lastIndex = cursor;
+		const open = RAW_OPEN_RE.exec(code);
+		if (!open) break;
+		strayCloses(cursor, open.index);
+
+		const tag = open[1]!.toLowerCase() as RawTextTag;
+		const attrs = open[2] ?? "";
+		const line = at(open.index);
+		const bodyStart = open.index + open[0].length;
+		const closeRe = new RegExp(`</${tag}\\s*>`, "ig");
+		closeRe.lastIndex = bodyStart;
+		const close = closeRe.exec(code);
+		const nested = nextLineStartOpen(bodyStart);
+
+		if (close) {
+			const bad = badCloseIn(open.index, close.index);
+			if (bad) {
+				// Already reported; resume after it so later blocks are still checked.
+				cursor = bad.end;
+				continue;
+			}
+			if (nested !== null && nested.index < close.index) {
+				// The new tag means this one is missing its closer. Report it, then
+				// check the new tag on its own so later problems are found too.
+				const nLine = at(nested.index);
+				problems.push({
+					line: nLine,
+					message: `Line ${nLine}: a new <${nested.tag}> starts inside the <${tag}> opened on line ${line}. Add </${tag}> before line ${nLine}.`,
+				});
+				cursor = nested.index;
+				continue;
+			}
+			const body = code.slice(bodyStart, close.index);
+			if (tag === "script" && SRC_ATTR_RE.test(attrs) && body.trim()) {
+				const lastLine = at(close.index);
+				problems.push({
+					line,
+					message: `Line ${line}: this <script> loads a src file, so browsers ignore the code written inside it (lines ${line}–${lastLine}). Close it with </script> right after the opening tag and put inline code in its own <script>.`,
+				});
+			} else {
+				cleanBlocks.push({
+					tag,
+					openTag: open[0],
+					attrs,
+					body,
+					line,
+					bodyLine: at(bodyStart),
+				});
+			}
+			cursor = close.index + close[0].length;
 			continue;
 		}
 
-		// 3. External scripts ignore their body, so code written there never runs.
-		if (block.tag === "script" && SRC_ATTR_RE.test(block.attrs) && block.body.trim()) {
-			found.push({
-				line: block.line,
-				message: `Line ${block.line}: this <script> loads a src file, so browsers ignore the code written inside it (lines ${block.line}–${lastLine}). Close it with </script> right after the opening tag and put inline code in its own <script>.`,
-			});
+		// Never closed. If a misspelled closer inside it is the real cause, that is already
+		// reported; otherwise report it. Then carry on so later problems are found too.
+		const regionEnd = nested?.index ?? code.length;
+		const bad = badCloseIn(open.index, regionEnd);
+		if (bad) {
+			cursor = bad.end;
+			continue;
 		}
+		problems.push({
+			line,
+			message:
+				nested !== null
+					? `Line ${line}: <${tag}> is never closed. Add </${tag}> before line ${at(nested.index)}.`
+					: `Line ${line}: <${tag}> is never closed. Add </${tag}>.`,
+		});
+		cursor = regionEnd;
 	}
 
-	return found.sort((a, b) => a.line - b.line).map((f) => f.message);
+	const tail = code.slice(cursor);
+	const dangling = DANGLING_OPEN_RE.exec(tail);
+	if (dangling) {
+		const line = at(cursor + dangling.index);
+		problems.push({
+			line,
+			message: `Line ${line}: <${dangling[1]!.toLowerCase()} tag is missing its closing ">".`,
+		});
+		strayCloses(cursor, cursor + dangling.index);
+	} else {
+		strayCloses(cursor, code.length);
+	}
+
+	const seen = new Set<string>();
+	const errors = problems
+		.sort((x, y) => x.line - y.line)
+		.map((p) => p.message)
+		.filter((m) => (seen.has(m) ? false : (seen.add(m), true)));
+	return { errors, cleanBlocks };
 }
 
 const EVENT_HANDLER_RE = /\s(on[a-z]+)\s*=/gi;
@@ -227,9 +365,8 @@ export function validateSnippet(code: string): ValidationResult {
 		return { errors, warnings };
 	}
 
-	const { segments, errors: tagErrors } = scanSnippet(code);
-	errors.push(...tagErrors);
-	if (tagErrors.length === 0) errors.push(...findStructuralErrors(code, segments));
+	errors.push(...findTagProblems(code).errors);
+	const { segments } = scanSnippet(code);
 
 	const handlers = new Set<string>();
 	let visibleText = false;
@@ -375,13 +512,12 @@ export async function minifySnippet(code: string): Promise<string> {
  * the snippet line number to fix.
  */
 export async function checkScriptSyntax(code: string): Promise<string[]> {
-	const { segments, errors: scanErrors } = scanSnippet(code);
-	if (scanErrors.length > 0) return [];
+	// Only well-formed blocks: a block with a tag problem is reported as that.
+	const { cleanBlocks } = findTagProblems(code);
 
 	const errors: string[] = [];
-	for (const seg of segments) {
-		if (seg.kind !== "raw" || seg.block.tag !== "script") continue;
-		const { block } = seg;
+	for (const block of cleanBlocks) {
+		if (block.tag !== "script") continue;
 		if (!block.body.trim() || SRC_ATTR_RE.test(block.attrs)) continue;
 		const type = scriptType(block.attrs);
 
@@ -415,6 +551,11 @@ export async function checkScriptSyntax(code: string): Promise<string[]> {
 	return errors;
 }
 
+function lineOf(message: string): number {
+	const m = /^Line (\d+):/.exec(message);
+	return m ? Number(m[1]) : 0;
+}
+
 // ── Full save pipeline ──────────────────────────────────────────
 
 export interface PipelineInput {
@@ -436,7 +577,12 @@ export interface PipelineOutput {
 
 export async function runPipeline(input: PipelineInput): Promise<PipelineOutput> {
 	const { errors, warnings } = validateSnippet(input.codeContent);
-	if (errors.length === 0) errors.push(...(await checkScriptSyntax(input.codeContent)));
+	// Syntax errors are reported alongside tag problems, so everything can be fixed in one pass.
+	const tooBig = errors.some((e) => e.startsWith("Snippet is "));
+	if (!tooBig) {
+		errors.push(...(await checkScriptSyntax(input.codeContent)));
+		errors.sort((a, b) => lineOf(a) - lineOf(b));
+	}
 	if (errors.length > 0) {
 		return { ok: false, errors, warnings, compiledContent: "", isMinified: input.isMinified };
 	}

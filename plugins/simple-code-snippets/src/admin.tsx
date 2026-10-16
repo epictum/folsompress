@@ -476,7 +476,7 @@ function SettingsPage() {
 					description:
 						resultErrors.length === 1
 							? resultErrors[0]
-							: `${resultErrors.length} problems need fixing. See the details on this page.`,
+							: `${resultErrors.length} problems need fixing. See the list in the Code Snippet section.`,
 					variant: "error",
 				});
 				return;
@@ -488,7 +488,7 @@ function SettingsPage() {
 			if (needsReview) setScrollToIssues((n) => n + 1);
 			toast.add({
 				title: "Settings updated",
-				description: needsReview ? `${summary} Review the notes shown on this page.` : summary,
+				description: needsReview ? `${summary} Review the notes in the Code Snippet section.` : summary,
 				...(needsReview ? { variant: "warning" as const } : {}),
 			});
 		} catch {
@@ -576,7 +576,11 @@ function SettingsPage() {
 								{errors.length > 0 && (
 									<Notice
 										tone="danger"
-										title="Not saved — fix these first"
+										title={
+											errors.length === 1
+												? "Not saved — fix this first"
+												: `Not saved — fix these ${errors.length} problems first`
+										}
 										items={errors}
 										onLineClick={jumpToLine}
 									/>
