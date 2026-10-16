@@ -87,6 +87,41 @@ describe("validateSnippet", () => {
 		expect(validateSnippet(code).errors[0]).toMatch(/^Line 1: this <script> loads a src file, so browsers ignore/);
 	});
 
+	it("reports every misspelled closing tag, not just the first", () => {
+		const code = [
+			"<script>a();</scrrript>",
+			'<script async src="https://example.com/a.js"></scrrript>',
+			"<script>",
+			"b();",
+			"</scrrript>",
+		].join("\n");
+		const { errors } = validateSnippet(code);
+		expect(errors).toHaveLength(3);
+		expect(errors.map((e) => e.slice(0, 7))).toEqual(["Line 1:", "Line 2:", "Line 5:"]);
+		for (const e of errors) expect(e).toMatch(/looks like a misspelled <\/script>.*Change it to <\/script>/);
+	});
+
+	it("reports each missing closer when several scripts run together", () => {
+		const code = ["<script>a();", '<script async src="https://example.com/a.js">', "<script>", "b();", "</script>"].join(
+			"\n",
+		);
+		const { errors } = validateSnippet(code);
+		expect(errors).toHaveLength(2);
+		expect(errors[0]).toMatch(/^Line 2: a new <script> starts inside the <script> opened on line 1/);
+		expect(errors[1]).toMatch(/^Line 3: a new <script> starts inside the <script> opened on line 2/);
+	});
+
+	it("flags a misspelled opening tag once, without a knock-on stray-closer error", () => {
+		const { errors } = validateSnippet("<scirpt>\nb();\n</script>");
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toMatch(/^Line 1: "<scirpt…>" looks like a misspelled <script>/);
+	});
+
+	it("does not mistake real elements like <noscript> for misspellings", () => {
+		const code = '<noscript><iframe src="https://example.com/ns.html"></iframe></noscript>';
+		expect(validateSnippet(code).errors).toEqual([]);
+	});
+
 	it("rejects oversized snippets", () => {
 		expect(validateSnippet("x".repeat(70 * 1024)).errors[0]).toMatch(/limit is 64 KB/);
 	});
@@ -127,6 +162,15 @@ describe("runPipeline", () => {
 			expect(out.ok).toBe(false);
 			expect(out.errors[0]).toMatch(/^Line 3: JavaScript syntax error in the <script> that starts on line 1/);
 		}
+	});
+
+	it("reports tag problems and syntax errors together", async () => {
+		const code = ["<script>a();</scrpit>", "<script>", "go(;", "</script>"].join("\n");
+		const out = await runPipeline({ codeContent: code, isMinified: false });
+		expect(out.ok).toBe(false);
+		expect(out.errors).toHaveLength(2);
+		expect(out.errors[0]).toMatch(/^Line 1: "<\/scrpit>" looks like a misspelled/);
+		expect(out.errors[1]).toMatch(/^Line 3: JavaScript syntax error in the <script> that starts on line 2/);
 	});
 
 	it("blocks invalid JSON-LD even with minification off", async () => {
