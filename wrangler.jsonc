@@ -15,8 +15,16 @@
 	},
 	// Runtime variables (kept in sync with the Cloudflare dashboard)
 	"vars": {
-		"EMDASH_SITE_URL": "https://folsompress.michael-a46.workers.dev",
+		"EMDASH_SITE_URL": "https://folsompress.com",
 	},
+	// Custom domains: Cloudflare creates the DNS records and certificates on deploy.
+	// www is redirected to the apex with a Redirect Rule in the dashboard.
+	// ROLLBACK: delete this block, restore EMDASH_SITE_URL to
+	// https://folsompress.michael-a46.workers.dev, and redeploy.
+	"routes": [
+		{ "pattern": "folsompress.com", "custom_domain": true },
+		{ "pattern": "www.folsompress.com", "custom_domain": true },
+	],
 	"d1_databases": [
 		{
 			"binding": "DB",
