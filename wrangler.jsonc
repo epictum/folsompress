@@ -59,8 +59,12 @@
 			"enabled": false,
 		},
 	},
-	// General maintenance cron trigger
+	// EmDash maintenance: scheduled publishing, plugin cron, backups, cleanup.
+	// Hourly keeps the site to 24 runs a day. Every minute ("* * * * *") was
+	// 1,440 runs a day, and each run boots EmDash (~80 ms CPU), which tripped
+	// the Workers Free plan's 10 ms CPU limit and its warning emails. With
+	// hourly, a scheduled post goes live within the hour.
 	"triggers": {
-		"crons": ["* * * * *"],
+		"crons": ["0 * * * *"],
 	},
 }
