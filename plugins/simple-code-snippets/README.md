@@ -1,93 +1,137 @@
-# Simple Code Snippets
+# Simple Code Snippets for EmDash
 
-An EmDash CMS plugin that inserts one custom snippet — JavaScript, CSS, or raw HTML — into the `<head>` or just before `</body>` on every public page. Built for Google Tag Manager, analytics tags, verification snippets, and small custom scripts, without touching theme code.
+Add one snippet of JavaScript, CSS or HTML to the `<head>`, or just before `</body>`, on every public page of an [EmDash](https://github.com/emdash-cms/emdash) site. Built for Google Tag Manager, Google Analytics, verification tags and small custom scripts, so you don't have to edit theme code.
+
+You manage it from a settings page in the EmDash admin that follows the admin's own design. It has a code editor with line numbers, and the snippet is checked when you save, so a broken tag never reaches your live site.
 
 ## Features
 
-- **Code Placement**: a Header / Footer button group, with a line under it saying exactly where the snippet loads.
-- **Enable snippet** switch to turn injection on and off without losing the snippet.
-- **Server-side minification** (Terser for inline JS, plus compact CSS and JSON-LD). The editor keeps your original formatting; pages receive the minified copy.
-- **Ace editor** with line numbers and HTML/JS/CSS highlighting, following the admin's light/dark mode. Ace is BSD-3 licensed and react-ace is MIT, so both are fine for commercial use.
-- **Validation on save**: unclosed or malformed `<script>`/`<style>` tags, scripts nested inside unclosed scripts, code inside `<script src>`, and JavaScript/JSON syntax errors block the save. Each problem names its line, is marked in the editor gutter, and links to the line.
-- **Security warnings** (non-blocking): inline event handlers such as `onload=`, `javascript:` URLs, insecure `http://` resources, stray `<html>/<head>/<body>` tags, and bare code that would show up as visible text.
-- **Minification fallback**: if Terser can't parse the script, minification is switched off, the raw snippet is saved, and a warning banner explains why.
-- **Delete all settings** behind a confirmation modal: "This action will permanently delete all settings and cannot be undone."
+- **Code Placement.** Load the snippet in the Header (inside `<head>`) or the Footer (just before `</body>`).
+- **Enable snippet.** Turn the snippet off without losing it.
+- **Server-side minification** (optional). Inline JavaScript is minified with Terser, and CSS and JSON-LD are compacted. The editor keeps your original formatting; pages get the minified copy.
+- **Code editor.** Ace, with line numbers and HTML/JS/CSS highlighting, following the admin's light/dark mode.
+- **Checked on save.** A save is blocked, with every problem listed at once, for:
+  - unclosed, malformed or misspelled tags (`</ script>`, `</scrrript>`, `<scirpt>`)
+  - a new `<script>` starting inside one that was never closed
+  - code written inside a `<script src="…">`, which browsers ignore
+  - JavaScript and JSON syntax errors
+
+  Each problem names its line, is marked in the editor's gutter, and links to that line.
+- **Security notes.** These don't block the save: inline event handlers (`onload=`), `javascript:` URLs, insecure `http://` resources, stray `<html>`/`<head>`/`<body>` tags, and code that would show up as visible text.
+- **Native admin feedback.** Saves and errors use the admin's own toast notifications, saying what changed ("Placement has been changed to Footer.").
+- **Delete all settings.** Removes the stored snippet and resets everything, behind a confirmation dialog.
+
+## Requirements
+
+- EmDash **1.3.x**: the plugin is built and tested against EmDash 1.3, with Astro and React 19.
+- Your site's base layout must render EmDash's page slots, `<EmDashHead>` and `<EmDashBodyEnd>`. The official EmDash templates already do (see [step 3](#3-check-your-layout)).
+- Any package manager: pnpm, npm or Bun. Cloudflare Workers Builds uses Bun when a site has no lockfile.
 
 ## Install
 
-This is a **native** plugin, so it is added to your site's code rather than installed from the plugin registry (see [Why native](#why-native)).
+This is a **native** EmDash plugin: you add it to your site's code, not from the plugin marketplace. EmDash only lets native plugins add raw `<script>` and HTML to pages; marketplace plugins run sandboxed and can't (see [Why native](#why-native)).
 
-1. Put this folder in your site repo, e.g. `plugins/simple-code-snippets`, and add it as a dependency:
+### 1. Add the package
 
-   ```sh
-   pnpm add ./plugins/simple-code-snippets
-   ```
+Install it straight from GitHub:
 
-2. Register it in `astro.config.mjs`:
+```sh
+# pnpm
+pnpm add github:epictum/emdash-plugin-simple-code-snippets
 
-   ```js
-   import emdash from "emdash/astro";
-   import { simpleCodeSnippetsPlugin } from "emdash-plugin-simple-code-snippets";
+# npm
+npm install github:epictum/emdash-plugin-simple-code-snippets
 
-   export default defineConfig({
-     integrations: [
-       emdash({
-         // ...your existing options
-         plugins: [simpleCodeSnippetsPlugin()],
-       }),
-     ],
-   });
-   ```
+# Bun
+bun add github:epictum/emdash-plugin-simple-code-snippets
+```
 
-3. Make sure your base layout renders EmDash's page slots. The official templates already do:
+That adds this line to your site's `package.json`:
 
-   ```astro
-   ---
-   import { EmDashHead, EmDashBodyEnd } from "emdash/ui";
-   ---
-   <head>
-     <EmDashHead page={pageCtx} />
-   </head>
-   <body>
-     <slot />
-     <EmDashBodyEnd page={pageCtx} />
-   </body>
-   ```
+```json
+"emdash-plugin-simple-code-snippets": "github:epictum/emdash-plugin-simple-code-snippets"
+```
 
-   Without `<EmDashHead>` (for Header) or `<EmDashBodyEnd>` (for Footer), the snippet has nowhere to render.
+To lock it to a specific commit or tag, add `#<commit-or-tag>` to the end. No build step is needed: like EmDash's own plugins, it ships TypeScript source that your site's build compiles.
 
-4. Deploy, then open **Admin → Plugins → Code Snippets**.
+<details>
+<summary>Alternative: keep a copy in your site repo</summary>
 
-## How it maps to the PRD
+If you want to change the plugin's code, copy this repo into your site as a workspace package:
 
-| PRD | Implementation |
-| --- | --- |
-| Dedicated D1 table `ext_code_injection_settings` | One plugin-scoped record (`ctx.kv`, key `config:settings`). EmDash stores it in the site database (D1 on Cloudflare), namespaced by plugin ID. Plugins get no raw table access, so this is the supported equivalent. Column mapping is documented in `src/config.ts`. |
-| `id = 1` single row | One fixed key, so there is only ever one configuration. |
-| `updated_at` | `updatedAt`, shown under the editor. |
-| Injection during edge rendering | `page:fragments` hook. EmDash calls it while rendering each public page on the Worker and places the output in `head` or `body:end`. |
-| Install routine | `plugin:install` seeds a disabled default config. |
-| Uninstall routine + confirmation modal | Native plugins are removed by editing `astro.config.mjs`, and the admin's uninstall dialog only exists for registry plugins. So the settings page has a **Delete all settings** button with the required modal; use it before removing the plugin. The `plugin:uninstall` hook also clears data when EmDash passes `deleteData: true`. |
-| Terser pipeline | `src/pipeline.ts`: validate → minify → commit, with the fallback. |
+1. Copy the repo to `plugins/simple-code-snippets` in your site.
+2. Tell your package manager about the folder:
+   - **pnpm:** add it to `pnpm-workspace.yaml`:
+     ```yaml
+     packages:
+       - "plugins/*"
+     ```
+   - **npm / Bun:** add it to your site's `package.json`:
+     ```json
+     "workspaces": ["plugins/*"]
+     ```
+   If your site deploys with Bun (Cloudflare Workers Builds without a lockfile) but you develop with pnpm, add both.
+   **Bun 1.3 and later** install workspace packages in isolation, which gives the plugin its own copy of `@cloudflare/kumo` instead of sharing the admin's. Cloudflare Workers Builds uses Bun when there's no lockfile. Add a `bunfig.toml` at your site's root so everything shares one copy:
+     ```toml
+     [install]
+     linker = "hoisted"
+     ```
+3. Add the dependency as `"emdash-plugin-simple-code-snippets": "workspace:*"` and run your install.
 
-### Why native
+</details>
 
-EmDash only lets trusted, native plugins output raw HTML and scripts (the `page:fragments` hook needs the `hooks.page-fragments:register` capability and is never run for sandboxed plugins). That's a deliberate security boundary: a registry plugin can't inject script into your pages. The trade-off is that this plugin ships as code in your site repo, not through the marketplace.
+### 2. Register the plugin
 
-## Notes
+In `astro.config.mjs`, import the plugin and add it to `plugins` inside `emdash({ … })`:
 
-- **Bundle size.** Terser adds about 1.2 MB (unminified) to the Worker bundle. It is loaded lazily, only when you save (to check script syntax and, if enabled, minify), so page renders never pay for it.
-- **Per-request cost.** Each public page render does one small KV read for the snippet.
-- **Who can edit.** Routes use EmDash's default `plugins:manage` permission, so only administrators can change the snippet. Anyone with that permission can run arbitrary script on your public site, which is the point of the plugin.
-- **One snippet.** Matching the PRD, there is one snippet with one placement. Put head and footer code in separate plugins or extend `SnippetConfig` to an array if you need both.
+```js
+import emdash from "emdash/astro";
+import { simpleCodeSnippetsPlugin } from "emdash-plugin-simple-code-snippets";
 
-## Dependencies
+export default defineConfig({
+	integrations: [
+		emdash({
+			// …your existing options (database, storage, …)
+			plugins: [simpleCodeSnippetsPlugin()],
+		}),
+	],
+});
+```
 
-`@cloudflare/kumo` is a peer dependency pinned to the version EmDash's admin uses (2.6.0 for EmDash 1.3). It has to match: the toast notifications only work when the plugin and the admin load the same copy of Kumo, because the toast provider is shared through React context. If EmDash moves to a newer Kumo, update the pin to match. `@phosphor-icons/react` is also a peer dependency, for the same reason.
+### 3. Check your layout
+
+The snippet is added through EmDash's page slots. Your base layout (often `src/layouts/Base.astro`) needs both:
+
+```astro
+---
+import { EmDashHead, EmDashBodyEnd } from "emdash/ui";
+---
+<html>
+	<head>
+		<EmDashHead page={pageCtx} />
+	</head>
+	<body>
+		<slot />
+		<EmDashBodyEnd page={pageCtx} />
+	</body>
+</html>
+```
+
+`<EmDashHead>` is where Header snippets go, and `<EmDashBodyEnd>` is where Footer snippets go. The official templates already include both.
+
+### 4. Deploy and add your snippet
+
+Deploy as usual, then open **Admin → Plugins → Code Snippets**:
+
+1. Pick **Header** or **Footer**.
+2. Paste your snippet into **Code Snippet**, exactly as your provider gives it.
+3. Turn on **Enable snippet** and click **Save settings**.
+
+Then open a public page and view its source to see the snippet.
 
 ## Edge caching
 
-If your site caches rendered pages (for example Astro route caching on Cloudflare), a saved snippet only appears once each cached page expires. Plugins can't purge the page cache themselves in EmDash 1.x, so add a small site middleware that purges after a successful save or delete:
+If your site caches rendered pages, for example with Astro route caching on Cloudflare (`routeRules` with `maxAge`), cached pages keep serving the old snippet until they expire. Plugins can't clear the page cache in EmDash 1.x, so add this small middleware to your site to clear the cache whenever the snippet is saved or deleted:
 
 ```ts
 // src/middleware.ts
@@ -104,44 +148,72 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		SNIPPET_WRITE_ROUTE.test(context.url.pathname) &&
 		context.cache?.enabled
 	) {
-		// "site" must be a tag that every cached route carries (add it to each routeRules entry).
 		await context.cache.invalidate({ tags: ["site"] }).catch(() => {});
 	}
 	return response;
 });
 ```
 
-Sites without page caching don't need this.
+Then tag every cached route with `"site"` in `astro.config.mjs`, so one purge clears them all:
 
-## Changelog
+```js
+const edge = (...tags) => ({ maxAge: 300, swr: 86400, tags: [...tags, "site"] });
 
-- **1.4.1**: Save validation reports every problem at once instead of stopping at the first. It catches misspelled tags (`</scrrript>`, `<scirpt>`) and recovers after each problem. It reports root causes rather than knock-on errors, and runs the JavaScript syntax check alongside tag checks. The toast gives the single error, or the error count with a pointer to the list in the Code Snippet section.
-- **1.4.0**: Stricter save validation. Saves are now blocked for: a malformed closing tag (for example `</ script>`) that lets one script swallow the next; a new `<script>` starting inside an unclosed one; code written inside a `<script src>`, which browsers ignore; and JavaScript or JSON syntax errors, which are now checked on every save whether or not minification is on. Problems show in the Code Snippet section (scrolled into view on save) and as gutter markers in the editor; clicking "Line N" jumps to that line.
-- **1.3.0**: Page layout follows the EmDash admin. The title and description sit outside the panels in a `PageHeader` (same markup as Redirects/Categories, with an actions slot on the right for future buttons). Settings are grouped into `SettingsSection` boxes like General Settings → Site Identity: section title above, rows inside, with hairline dividers running edge to edge.
-- **1.2.0**: Saves, errors and deletes now show the admin's own toast notifications, describing what changed (for example "Placement has been changed to Footer."), instead of a banner that stays until dismissed. Code Placement uses Kumo's segmented Tabs, the same sliding control as the Comments page. Panels use the admin's flat bordered style with no drop shadow. Icons come from `@phosphor-icons/react`, like the rest of the admin. `@cloudflare/kumo` is now a peer dependency pinned to the admin's version (2.6.0), so the plugin shares the admin's Kumo and its toast provider.
-- **1.1.0**: Settings page redesign. Settings card in the order Code Placement, Enable snippet, Enable server-side minification, with visible descriptions instead of tooltips. Code editor in its own card with Save. Danger zone restyled with icons. Inline SVG icons, so there's no new dependency.
-- **1.0.0**: First release.
+routeRules: {
+	"/": edge("posts"),
+	"/posts/[slug]": edge("posts"),
+	// …
+},
+```
+
+Sites without page caching don't need any of this.
+
+## Uninstall
+
+1. In **Code Snippets**, click **Delete all settings** to remove the stored snippet and settings.
+2. Remove `simpleCodeSnippetsPlugin()` from `astro.config.mjs`.
+3. Uninstall the package (for example `pnpm remove emdash-plugin-simple-code-snippets`) and redeploy.
+
+The settings page has its own Delete button because the admin's uninstall dialog only appears for marketplace plugins.
+
+## Notes
+
+- **Who can edit.** The settings routes use EmDash's `plugins:manage` permission, so only administrators can change the snippet. Anyone with that permission can run any script on your public site; that is what the plugin is for.
+- **Per-request cost.** Each public page render does one small key-value read for the snippet.
+- **Bundle size.** Terser adds about 1.2 MB (unminified) to the Worker bundle. It is loaded only when you save, to check script syntax and to minify if that's on, so page renders never load it.
+- **One snippet.** There is one snippet with one placement. For code in both the head and the footer, put it all in one placement, or extend `SnippetConfig` to hold more than one.
+- **Kumo version.** `@cloudflare/kumo` is a peer dependency pinned to the version EmDash's admin uses (2.6.0 in EmDash 1.3). The plugin has to share the admin's copy of Kumo to use the admin's toast notifications. Kumo also bundles its own Base UI, so two Kumo copies mean two separate toast systems. If the plugin can't reach the admin's toasts, for example because of a version mismatch or a second Kumo copy, it shows its messages on the page instead of crashing. If a future EmDash moves to a newer Kumo, update this pin to match.
+
+## Why native
+
+EmDash only lets trusted native plugins output raw HTML and scripts. The `page:fragments` hook requires the `hooks.page-fragments:register` capability and never runs for sandboxed plugins. That is a deliberate security boundary: a marketplace plugin can't inject script into your pages. The trade-off is that this plugin is added as code in your site rather than installed from the marketplace.
+
+## How it works
+
+| Piece | What it does |
+| --- | --- |
+| `src/descriptor.ts` | `simpleCodeSnippetsPlugin()`, the entry you register in `astro.config.mjs` |
+| `src/index.ts` | `definePlugin()`: install/uninstall hooks, the `page:fragments` hook that renders the snippet, and the settings API routes |
+| `src/pipeline.ts` | Save pipeline: validation → syntax check → optional minification, with a fallback if minification fails |
+| `src/config.ts` | Stored settings shape and defaults; one plugin-scoped key-value record (`config:settings`) |
+| `src/admin.tsx` | The admin settings page (React, Kumo, Ace) |
+
+Settings live in EmDash's plugin key-value store, which is your site database (D1 on Cloudflare), namespaced to this plugin.
 
 ## Development
 
 ```sh
 pnpm install
-pnpm test        # pipeline + plugin hook/route tests (vitest)
+pnpm test        # validation pipeline + plugin hook/route tests (vitest)
 pnpm typecheck   # against the published emdash types
 ```
 
-```
-src/
-  descriptor.ts  # simpleCodeSnippetsPlugin() for astro.config.mjs
-  index.ts       # definePlugin(): lifecycle hooks, page:fragments, routes
-  pipeline.ts    # validation, Terser minification, fallback
-  config.ts      # stored record shape, defaults, PRD column mapping
-  admin.tsx      # React settings page with Ace editor
-tests/
-```
+To try changes on a real site, use the [workspace setup](#1-add-the-package) above and point it at your local copy.
 
-Requires `emdash` 1.x.
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-MIT
+[MIT](LICENSE)
