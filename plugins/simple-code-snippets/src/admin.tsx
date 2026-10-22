@@ -7,13 +7,13 @@
  * server-side minification), "Code Snippet" section with Save, Danger zone.
  * PageHeader / SettingsSection / SettingRow mirror the EmDash admin's own.
  * Status messages use the admin's own toast notifications (Kumo toast
- * manager); the placement switch uses Kumo's segmented Tabs, like Comments.
+ * manager), with an on-page fallback if the toast provider can't be reached; the placement switch uses Kumo's segmented Tabs, like Comments.
  * Kumo must resolve to the same copy the admin uses, so it is a peer
  * dependency pinned to the admin's version.
  * Ace editor is BSD-3 licensed; react-ace is MIT.
  */
 
-import { Button, Switch, Tabs, useKumoToastManager } from "@cloudflare/kumo";
+import { Button, Switch, Tabs } from "@cloudflare/kumo";
 import { TrashIcon, WarningIcon } from "@phosphor-icons/react";
 import type { PluginAdminExports } from "emdash";
 import { apiFetch, getErrorMessage, parseApiResponse } from "emdash/plugin-utils";
@@ -25,6 +25,7 @@ import "ace-builds/src-noconflict/theme-tomorrow";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
 
 import type { Placement, SaveResult, SnippetConfig } from "./config.js";
+import { type StatusMessage, useOptionalToastManager } from "./toast.js";
 
 const API_BASE = "/_emdash/api/plugins/simple-code-snippets";
 const DELETE_WARNING = "This action will permanently delete all settings and cannot be undone.";
@@ -267,12 +268,14 @@ function describeChanges(before: SnippetConfig, after: SnippetConfig): string {
 function Notice({
 	tone,
 	title,
+	description,
 	items,
 	onDismiss,
 	onLineClick,
 }: {
-	tone: "danger" | "warning";
+	tone: "danger" | "warning" | "success";
 	title: string;
+	description?: string;
 	items?: string[];
 	onDismiss?: () => void;
 	/** When set, a leading "Line N:" becomes a link that jumps the editor there. */
@@ -282,15 +285,21 @@ function Notice({
 	const styles = {
 		danger: "border-kumo-danger/50 bg-kumo-danger/10",
 		warning: "border-kumo-warning/30 bg-kumo-warning/10",
+		success: "border-kumo-line bg-kumo-base",
 	}[tone];
-	const titleColor = tone === "danger" ? "text-kumo-danger" : "text-kumo-warning";
+	const titleColor = {
+		danger: "text-kumo-danger",
+		warning: "text-kumo-warning",
+		success: "text-kumo-default",
+	}[tone];
 	return (
-		<div role="alert" className={`rounded-lg border p-4 ${styles}`}>
+		<div role={tone === "success" ? "status" : "alert"} className={`rounded-lg border p-4 ${styles}`}>
 			<div className="flex items-start justify-between gap-4">
 				<div className="space-y-1">
 					<div className={`text-sm font-medium ${titleColor}`}>
 							{title}
 						</div>
+					{description && <p className="text-sm text-kumo-subtle">{description}</p>}
 					{items && items.length > 0 && (
 						<ul className="list-disc ps-5 text-sm text-kumo-default space-y-0.5">
 							{items.map((item) => {
@@ -379,7 +388,24 @@ function DeleteConfirmDialog({
 
 function SettingsPage() {
 	const dark = useDarkMode();
-	const toast = useKumoToastManager();
+	const toast = useOptionalToastManager();
+	// Fallback status banner, only used when the admin's toasts are unavailable.
+	const [status, setStatus] = React.useState<StatusMessage | null>(null);
+	const notify = React.useCallback(
+		(message: StatusMessage) => {
+			if (toast) {
+				toast.add(message);
+				return;
+			}
+			setStatus(message);
+		},
+		[toast],
+	);
+	React.useEffect(() => {
+		if (!status || status.variant) return; // errors and warnings stay until dismissed
+		const timer = window.setTimeout(() => setStatus(null), 6000);
+		return () => window.clearTimeout(timer);
+	}, [status]);
 
 	const [loaded, setLoaded] = React.useState<SnippetConfig | null>(null);
 	const [isEnabled, setIsEnabled] = React.useState(false);
@@ -461,7 +487,7 @@ function SettingsPage() {
 			if (!res.ok) {
 				const message = await getErrorMessage(res, "Saving failed.");
 				setErrors([message]);
-				toast.add({ title: "Settings not saved", description: message, variant: "error" });
+				notify({ title: "Settings not saved", description: message, variant: "error" });
 				return;
 			}
 			const result = await parseApiResponse<SaveResult>(res);
@@ -471,7 +497,7 @@ function SettingsPage() {
 				const resultErrors = result.errors ?? ["Saving failed."];
 				setErrors(resultErrors);
 				setScrollToIssues((n) => n + 1);
-				toast.add({
+				notify({
 					title: "Settings not saved",
 					description:
 						resultErrors.length === 1
@@ -486,7 +512,7 @@ function SettingsPage() {
 			if (result.minifyFallback) setFallback(result.minifyFallback);
 			const needsReview = resultWarnings.length > 0 || Boolean(result.minifyFallback);
 			if (needsReview) setScrollToIssues((n) => n + 1);
-			toast.add({
+			notify({
 				title: "Settings updated",
 				description: needsReview ? `${summary} Review the notes in the Code Snippet section.` : summary,
 				...(needsReview ? { variant: "warning" as const } : {}),
@@ -494,7 +520,7 @@ function SettingsPage() {
 		} catch {
 			const message = "Saving failed. Check your connection and try again.";
 			setErrors([message]);
-			toast.add({ title: "Settings not saved", description: message, variant: "error" });
+			notify({ title: "Settings not saved", description: message, variant: "error" });
 		} finally {
 			setIsSaving(false);
 		}
@@ -507,7 +533,7 @@ function SettingsPage() {
 			if (!res.ok) {
 				const message = await getErrorMessage(res, "Deleting settings failed.");
 				setErrors([message]);
-				toast.add({ title: "Settings not deleted", description: message, variant: "error" });
+				notify({ title: "Settings not deleted", description: message, variant: "error" });
 				return;
 			}
 			const data = await parseApiResponse<{ config: SnippetConfig }>(res);
@@ -516,13 +542,13 @@ function SettingsPage() {
 			setWarnings([]);
 			setFallback(null);
 			setShowDelete(false);
-			toast.add({
+			notify({
 				title: "Settings deleted",
 				description: "Your snippet has been removed and all settings have been reset to their defaults.",
 			});
 		} catch {
 			setErrors(["Deleting settings failed."]);
-			toast.add({ title: "Settings not deleted", description: "Deleting settings failed.", variant: "error" });
+			notify({ title: "Settings not deleted", description: "Deleting settings failed.", variant: "error" });
 		} finally {
 			setIsDeleting(false);
 		}
@@ -539,6 +565,14 @@ function SettingsPage() {
 			/>
 
 			<div className="mt-6 grid gap-8">
+				{status && (
+					<Notice
+						tone={status.variant === "error" ? "danger" : status.variant === "warning" ? "warning" : "success"}
+						title={status.title}
+						description={status.description}
+						onDismiss={() => setStatus(null)}
+					/>
+				)}
 				<SettingsSection
 					title="Snippet Settings"
 					description="Choose where the snippet loads and how it is delivered to your pages."
