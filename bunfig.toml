@@ -1,0 +1,7 @@
+# Cloudflare Workers Builds installs with Bun (there is no lockfile). Bun 1.3+
+# gives workspace packages isolated node_modules, which handed the Simple Code
+# Snippets plugin its own copy of @cloudflare/kumo, separate from the EmDash
+# admin's, and broke its settings page (Base UI error #73). The hoisted layout
+# keeps one shared copy, as Bun 1.2 and npm do.
+[install]
+linker = "hoisted"
